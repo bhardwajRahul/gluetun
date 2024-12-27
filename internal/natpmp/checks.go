@@ -6,9 +6,7 @@ import (
 	"fmt"
 )
 
-var (
-	ErrRequestSizeTooSmall = errors.New("message size is too small")
-)
+var ErrRequestSizeTooSmall = errors.New("message size is too small")
 
 func checkRequest(request []byte) (err error) {
 	const minMessageSize = 2 // version number + operation code
@@ -28,14 +26,15 @@ var (
 )
 
 func checkResponse(response []byte, expectedOperationCode byte,
-	expectedResponseSize uint) (err error) {
+	expectedResponseSize uint,
+) (err error) {
 	const minResponseSize = 4
 	if len(response) < minResponseSize {
 		return fmt.Errorf("%w: need at least %d bytes and got %d byte(s)",
 			ErrResponseSizeTooSmall, minResponseSize, len(response))
 	}
 
-	if len(response) != int(expectedResponseSize) {
+	if uint(len(response)) != expectedResponseSize {
 		return fmt.Errorf("%w: expected %d bytes and got %d byte(s)",
 			ErrResponseSizeUnexpected, expectedResponseSize, len(response))
 	}
@@ -73,7 +72,7 @@ var (
 // if the result code is not a success (0).
 // See https://www.ietf.org/rfc/rfc6886.html#section-3.5
 //
-//nolint:gomnd
+//nolint:mnd
 func checkResultCode(resultCode uint16) (err error) {
 	switch resultCode {
 	case 0:

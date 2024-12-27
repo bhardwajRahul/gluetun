@@ -30,7 +30,7 @@ func Test_Settings_String(t *testing.T) {
 |   |           ├── Protocol: UDP
 |   |           └── Private Internet Access encryption preset: strong
 |   └── OpenVPN settings:
-|       ├── OpenVPN version: 2.5
+|       ├── OpenVPN version: 2.6
 |       ├── User: [not set]
 |       ├── Password: [not set]
 |       ├── Private Internet Access encryption preset: strong
@@ -43,18 +43,10 @@ func Test_Settings_String(t *testing.T) {
 |   └── DNS over TLS settings:
 |       ├── Enabled: yes
 |       ├── Update period: every 24h0m0s
-|       ├── Unbound settings:
-|       |   ├── Authoritative servers:
-|       |   |   └── Cloudflare
-|       |   ├── Caching: yes
-|       |   ├── IPv6: no
-|       |   ├── Verbosity level: 1
-|       |   ├── Verbosity details level: 0
-|       |   ├── Validation log level: 0
-|       |   ├── System user: root
-|       |   └── Allowed networks:
-|       |       ├── 0.0.0.0/0
-|       |       └── ::/0
+|       ├── Upstream resolvers:
+|       |   └── Cloudflare
+|       ├── Caching: yes
+|       ├── IPv6: no
 |       └── DNS filtering settings:
 |           ├── Block malicious: yes
 |           ├── Block ads: no
@@ -78,20 +70,26 @@ func Test_Settings_String(t *testing.T) {
 |   └── Enabled: no
 ├── Control server settings:
 |   ├── Listening address: :8000
-|   └── Logging: yes
+|   ├── Logging: yes
+|   └── Authentication file path: /gluetun/auth/config.toml
+├── Storage settings:
+|   └── Filepath: /gluetun/servers.json
 ├── OS Alpine settings:
 |   ├── Process UID: 1000
 |   └── Process GID: 1000
 ├── Public IP settings:
-|   ├── Fetching: every 12h0m0s
-|   └── IP file path: /tmp/gluetun/ip
+|   ├── IP file path: /tmp/gluetun/ip
+|   ├── Public IP data base API: ipinfo
+|   └── Public IP data backup APIs:
+|       ├── cloudflare
+|       ├── ifconfigco
+|       └── ip2location
 └── Version settings:
     └── Enabled: yes`,
 		},
 	}
 
 	for name, testCase := range testCases {
-		testCase := testCase
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 

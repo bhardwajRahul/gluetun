@@ -15,6 +15,7 @@ import (
 	"github.com/qdm12/gluetun/internal/provider/cyberghost"
 	"github.com/qdm12/gluetun/internal/provider/expressvpn"
 	"github.com/qdm12/gluetun/internal/provider/fastestvpn"
+	"github.com/qdm12/gluetun/internal/provider/giganews"
 	"github.com/qdm12/gluetun/internal/provider/hidemyass"
 	"github.com/qdm12/gluetun/internal/provider/ipvanish"
 	"github.com/qdm12/gluetun/internal/provider/ivpn"
@@ -43,7 +44,6 @@ type Providers struct {
 type Storage interface {
 	FilterServers(provider string, selection settings.ServerSelection) (
 		servers []models.Server, err error)
-	GetServerByName(provider, name string) (server models.Server, ok bool)
 }
 
 type Extractor interface {
@@ -54,7 +54,8 @@ type Extractor interface {
 func NewProviders(storage Storage, timeNow func() time.Time,
 	updaterWarner common.Warner, client *http.Client, unzipper common.Unzipper,
 	parallelResolver common.ParallelResolver, ipFetcher common.IPFetcher,
-	extractor custom.Extractor) *Providers {
+	extractor custom.Extractor,
+) *Providers {
 	randSource := rand.NewSource(timeNow().UnixNano())
 
 	//nolint:lll
@@ -63,7 +64,8 @@ func NewProviders(storage Storage, timeNow func() time.Time,
 		providers.Custom:                custom.New(extractor),
 		providers.Cyberghost:            cyberghost.New(storage, randSource, parallelResolver),
 		providers.Expressvpn:            expressvpn.New(storage, randSource, unzipper, updaterWarner, parallelResolver),
-		providers.Fastestvpn:            fastestvpn.New(storage, randSource, unzipper, updaterWarner, parallelResolver),
+		providers.Fastestvpn:            fastestvpn.New(storage, randSource, client, updaterWarner, parallelResolver),
+		providers.Giganews:              giganews.New(storage, randSource, unzipper, updaterWarner, parallelResolver),
 		providers.HideMyAss:             hidemyass.New(storage, randSource, client, updaterWarner, parallelResolver),
 		providers.Ipvanish:              ipvanish.New(storage, randSource, unzipper, updaterWarner, parallelResolver),
 		providers.Ivpn:                  ivpn.New(storage, randSource, client, updaterWarner, parallelResolver),

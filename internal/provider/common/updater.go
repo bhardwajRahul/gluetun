@@ -6,13 +6,13 @@ import (
 	"net/netip"
 
 	"github.com/qdm12/gluetun/internal/models"
-	"github.com/qdm12/gluetun/internal/publicip/ipinfo"
 	"github.com/qdm12/gluetun/internal/updater/resolver"
 )
 
 var (
-	ErrNotEnoughServers    = errors.New("not enough servers found")
-	ErrHTTPStatusCodeNotOK = errors.New("HTTP status code not OK")
+	ErrNotEnoughServers     = errors.New("not enough servers found")
+	ErrHTTPStatusCodeNotOK  = errors.New("HTTP status code not OK")
+	ErrIPFetcherUnsupported = errors.New("IP fetcher not supported")
 )
 
 type Fetcher interface {
@@ -34,5 +34,7 @@ type Warner interface {
 }
 
 type IPFetcher interface {
-	FetchMultiInfo(ctx context.Context, ips []netip.Addr) (data []ipinfo.Response, err error)
+	String() string
+	CanFetchAnyIP() bool
+	FetchInfo(ctx context.Context, ip netip.Addr) (result models.PublicIP, err error)
 }

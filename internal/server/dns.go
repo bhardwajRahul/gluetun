@@ -8,7 +8,8 @@ import (
 )
 
 func newDNSHandler(ctx context.Context, loop DNSLoop,
-	warner warner) http.Handler {
+	warner warner,
+) http.Handler {
 	return &dnsHandler{
 		ctx:    ctx,
 		loop:   loop,
@@ -32,10 +33,10 @@ func (h *dnsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case http.MethodPut:
 			h.setStatus(w, r)
 		default:
-			http.Error(w, "method "+r.Method+" not supported", http.StatusBadRequest)
+			errMethodNotSupported(w, r.Method)
 		}
 	default:
-		http.Error(w, "route "+r.RequestURI+" not supported", http.StatusBadRequest)
+		errRouteNotSupported(w, r.RequestURI)
 	}
 }
 

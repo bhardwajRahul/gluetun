@@ -22,7 +22,7 @@ func noServerFoundError(selection settings.ServerSelection) (err error) {
 	messageParts = append(messageParts, "VPN "+selection.VPN)
 
 	protocol := constants.UDP
-	if *selection.OpenVPN.TCP {
+	if selection.OpenVPN.Protocol == constants.TCP {
 		protocol = constants.TCP
 	}
 	messageParts = append(messageParts, "protocol "+protocol)
@@ -34,6 +34,16 @@ func noServerFoundError(selection settings.ServerSelection) (err error) {
 		messageParts = append(messageParts, part)
 	default:
 		part := "countries " + commaJoin(selection.Countries)
+		messageParts = append(messageParts, part)
+	}
+
+	switch len(selection.Categories) {
+	case 0:
+	case 1:
+		part := "category " + selection.Categories[0]
+		messageParts = append(messageParts, part)
+	default:
+		part := "categories " + commaJoin(selection.Categories)
 		messageParts = append(messageParts, part)
 	}
 
@@ -116,6 +126,31 @@ func noServerFoundError(selection settings.ServerSelection) (err error) {
 
 	if *selection.PremiumOnly {
 		messageParts = append(messageParts, "premium tier only")
+	}
+
+	if *selection.StreamOnly {
+		messageParts = append(messageParts, "stream only")
+	}
+
+	if *selection.MultiHopOnly {
+		messageParts = append(messageParts, "multihop only")
+	}
+
+	if *selection.PortForwardOnly {
+		messageParts = append(messageParts, "port forwarding only")
+	}
+
+	if *selection.SecureCoreOnly {
+		messageParts = append(messageParts, "secure core only")
+	}
+
+	if *selection.TorOnly {
+		messageParts = append(messageParts, "tor only")
+	}
+
+	if selection.TargetIP.IsValid() {
+		messageParts = append(messageParts,
+			"target ip address "+selection.TargetIP.String())
 	}
 
 	message := "for " + strings.Join(messageParts, "; ")

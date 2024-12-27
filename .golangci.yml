@@ -7,25 +7,12 @@ issues:
     - path: _test\.go
       linters:
         - dupl
-        - goerr113
+        - err113
         - containedctx
+        - maintidx
     - path: "internal\\/server\\/.+\\.go"
       linters:
         - dupl
-    - path: "internal\\/configuration\\/settings\\/.+\\.go"
-      linters:
-        - dupl
-    - text: "^mnd: Magic number: 0[0-9]{3}, in <argument> detected$"
-      source: "^.+= os\\.OpenFile\\(.+, .+, 0[0-9]{3}\\)"
-      linters:
-        - gomnd
-    - text: "^mnd: Magic number: 0[0-9]{3}, in <argument> detected$"
-      source: "^.+= os\\.MkdirAll\\(.+, 0[0-9]{3}\\)"
-      linters:
-        - gomnd
-    - linters:
-        - lll
-      source: "^//go:generate .+$"
     - text: "returns interface \\(github\\.com\\/vishvananda\\/netlink\\.Link\\)"
       linters:
         - ireturn
@@ -43,16 +30,17 @@ linters:
     - bidichk
     - bodyclose
     - containedctx
+    - copyloopvar
     - decorder
     - dogsled
     - dupl
     - dupword
     - durationcheck
+    - err113
     - errchkjson
     - errname
-    - execinquery
     - exhaustive
-    - exportloopref
+    - fatcontext
     - forcetypeassert
     - gci
     - gocheckcompilerdirectives
@@ -63,10 +51,9 @@ linters:
     - gocritic
     - gocyclo
     - godot
-    - goerr113
+    - gofumpt
     - goheader
     - goimports
-    - gomnd
     - gomoddirectives
     - goprintffuncname
     - gosec
@@ -74,12 +61,14 @@ linters:
     - grouper
     - importas
     - interfacebloat
+    - intrange
     - ireturn
     - lll
     - maintidx
     - makezero
     - mirror
     - misspell
+    - mnd
     - musttag
     - nakedret
     - nestif
@@ -106,9 +95,3 @@ linters:
     - wastedassign
     - whitespace
     - zerologlint
-
-run:
-  skip-dirs:
-    - .devcontainer
-    - .github
-    - doc

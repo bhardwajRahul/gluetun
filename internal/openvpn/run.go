@@ -4,17 +4,17 @@ import (
 	"context"
 
 	"github.com/qdm12/gluetun/internal/configuration/settings"
-	"github.com/qdm12/golibs/command"
 )
 
 type Runner struct {
 	settings settings.OpenVPN
-	starter  command.Starter
+	starter  CmdStarter
 	logger   Logger
 }
 
-func NewRunner(settings settings.OpenVPN, starter command.Starter,
-	logger Logger) *Runner {
+func NewRunner(settings settings.OpenVPN, starter CmdStarter,
+	logger Logger,
+) *Runner {
 	return &Runner{
 		starter:  starter,
 		logger:   logger,
@@ -37,12 +37,10 @@ func (r *Runner) Run(ctx context.Context, errCh chan<- error, ready chan<- struc
 	select {
 	case <-ctx.Done():
 		<-waitError
-		close(waitError)
 		streamCancel()
 		<-streamDone
 		errCh <- ctx.Err()
 	case err := <-waitError:
-		close(waitError)
 		streamCancel()
 		<-streamDone
 		errCh <- err

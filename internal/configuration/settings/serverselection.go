@@ -12,6 +12,7 @@ import (
 	"github.com/qdm12/gluetun/internal/constants/vpn"
 	"github.com/qdm12/gluetun/internal/models"
 	"github.com/qdm12/gosettings"
+	"github.com/qdm12/gosettings/reader"
 	"github.com/qdm12/gosettings/validate"
 	"github.com/qdm12/gotree"
 )
@@ -27,8 +28,10 @@ type ServerSelection struct { //nolint:maligned
 	// state, and can be set to the unspecified address to indicate
 	// there is not target IP address to use.
 	TargetIP netip.Addr `json:"target_ip"`
-	// Counties is the list of countries to filter VPN servers with.
+	// Countries is the list of countries to filter VPN servers with.
 	Countries []string `json:"countries"`
+	// Categories is the list of categories to filter VPN servers with.
+	Categories []string `json:"categories"`
 	// Regions is the list of regions to filter VPN servers with.
 	Regions []string `json:"regions"`
 	// Cities is the list of cities to filter VPN servers with.
@@ -52,12 +55,21 @@ type ServerSelection struct { //nolint:maligned
 	// TODO extend to providers using FreeOnly.
 	PremiumOnly *bool `json:"premium_only"`
 	// StreamOnly is true if VPN servers not for streaming should
-	// be filtered. This is used with VPNUnlimited.
+	// be filtered. This is used with ProtonVPN and VPNUnlimited.
 	StreamOnly *bool `json:"stream_only"`
 	// MultiHopOnly is true if VPN servers that are not multihop
 	// should be filtered. This is used with Surfshark.
 	MultiHopOnly *bool `json:"multi_hop_only"`
-
+	// PortForwardOnly is true if VPN servers that don't support
+	// port forwarding should be filtered. This is used with PIA
+	// and ProtonVPN.
+	PortForwardOnly *bool `json:"port_forward_only"`
+	// SecureCoreOnly is true if VPN servers without secure core should
+	// be filtered. This is used with ProtonVPN.
+	SecureCoreOnly *bool `json:"secure_core_only"`
+	// TorOnly is true if VPN servers without tor should
+	// be filtered. This is used with ProtonVPN.
+	TorOnly *bool `json:"tor_only"`
 	// OpenVPN contains settings to select OpenVPN servers
 	// and the final connection.
 	OpenVPN OpenVPNSelection `json:"openvpn"`
@@ -67,23 +79,27 @@ type ServerSelection struct { //nolint:maligned
 }
 
 var (
-	ErrOwnedOnlyNotSupported    = errors.New("owned only filter is not supported")
-	ErrFreeOnlyNotSupported     = errors.New("free only filter is not supported")
-	ErrPremiumOnlyNotSupported  = errors.New("premium only filter is not supported")
-	ErrStreamOnlyNotSupported   = errors.New("stream only filter is not supported")
-	ErrMultiHopOnlyNotSupported = errors.New("multi hop only filter is not supported")
-	ErrFreePremiumBothSet       = errors.New("free only and premium only filters are both set")
+	ErrOwnedOnlyNotSupported       = errors.New("owned only filter is not supported")
+	ErrFreeOnlyNotSupported        = errors.New("free only filter is not supported")
+	ErrPremiumOnlyNotSupported     = errors.New("premium only filter is not supported")
+	ErrStreamOnlyNotSupported      = errors.New("stream only filter is not supported")
+	ErrMultiHopOnlyNotSupported    = errors.New("multi hop only filter is not supported")
+	ErrPortForwardOnlyNotSupported = errors.New("port forwarding only filter is not supported")
+	ErrFreePremiumBothSet          = errors.New("free only and premium only filters are both set")
+	ErrSecureCoreOnlyNotSupported  = errors.New("secure core only filter is not supported")
+	ErrTorOnlyNotSupported         = errors.New("tor only filter is not supported")
 )
 
 func (ss *ServerSelection) validate(vpnServiceProvider string,
-	storage Storage) (err error) {
+	filterChoicesGetter FilterChoicesGetter, warner Warner,
+) (err error) {
 	switch ss.VPN {
 	case vpn.OpenVPN, vpn.Wireguard:
 	default:
 		return fmt.Errorf("%w: %s", ErrVPNTypeNotValid, ss.VPN)
 	}
 
-	filterChoices, err := getLocationFilterChoices(vpnServiceProvider, ss, storage)
+	filterChoices, err := getLocationFilterChoices(vpnServiceProvider, ss, filterChoicesGetter, warner)
 	if err != nil {
 		return err // already wrapped error
 	}
@@ -96,51 +112,19 @@ func (ss *ServerSelection) validate(vpnServiceProvider string,
 		*ss = surfsharkRetroRegion(*ss)
 	}
 
-	err = validateServerFilters(*ss, filterChoices)
+	err = validateServerFilters(*ss, filterChoices, vpnServiceProvider, warner)
 	if err != nil {
 		return fmt.Errorf("for VPN service provider %s: %w", vpnServiceProvider, err)
 	}
 
-	if *ss.OwnedOnly &&
-		vpnServiceProvider != providers.Mullvad {
-		return fmt.Errorf("%w: for VPN service provider %s",
-			ErrOwnedOnlyNotSupported, vpnServiceProvider)
+	err = validateSubscriptionTierFilters(*ss, vpnServiceProvider)
+	if err != nil {
+		return fmt.Errorf("for VPN service provider %s: %w", vpnServiceProvider, err)
 	}
 
-	if *ss.FreeOnly &&
-		!helpers.IsOneOf(vpnServiceProvider,
-			providers.Protonvpn,
-			providers.VPNUnlimited,
-		) {
-		return fmt.Errorf("%w: for VPN service provider %s",
-			ErrFreeOnlyNotSupported, vpnServiceProvider)
-	}
-
-	if *ss.PremiumOnly &&
-		!helpers.IsOneOf(vpnServiceProvider,
-			providers.VPNSecure,
-		) {
-		return fmt.Errorf("%w: for VPN service provider %s",
-			ErrPremiumOnlyNotSupported, vpnServiceProvider)
-	}
-
-	if *ss.FreeOnly && *ss.PremiumOnly {
-		return fmt.Errorf("%w", ErrFreePremiumBothSet)
-	}
-
-	if *ss.StreamOnly &&
-		!helpers.IsOneOf(vpnServiceProvider,
-			providers.Protonvpn,
-			providers.VPNUnlimited,
-		) {
-		return fmt.Errorf("%w: for VPN service provider %s",
-			ErrStreamOnlyNotSupported, vpnServiceProvider)
-	}
-
-	if *ss.MultiHopOnly &&
-		vpnServiceProvider != providers.Surfshark {
-		return fmt.Errorf("%w: for VPN service provider %s",
-			ErrMultiHopOnlyNotSupported, vpnServiceProvider)
+	err = validateFeatureFilters(*ss, vpnServiceProvider)
+	if err != nil {
+		return fmt.Errorf("for VPN service provider %s: %w", vpnServiceProvider, err)
 	}
 
 	if ss.VPN == vpn.OpenVPN {
@@ -159,16 +143,20 @@ func (ss *ServerSelection) validate(vpnServiceProvider string,
 }
 
 func getLocationFilterChoices(vpnServiceProvider string,
-	ss *ServerSelection, storage Storage) (filterChoices models.FilterChoices,
-	err error) {
-	filterChoices = storage.GetFilterChoices(vpnServiceProvider)
+	ss *ServerSelection, filterChoicesGetter FilterChoicesGetter, warner Warner) (
+	filterChoices models.FilterChoices, err error,
+) {
+	filterChoices = filterChoicesGetter.GetFilterChoices(vpnServiceProvider)
 
 	if vpnServiceProvider == providers.Surfshark {
 		// // Retro compatibility
 		// TODO v4 remove
-		filterChoices.Regions = append(filterChoices.Regions, validation.SurfsharkRetroLocChoices()...)
-		err := validate.AreAllOneOfCaseInsensitive(ss.Regions, filterChoices.Regions)
+		newAndRetroRegions := append(filterChoices.Regions, validation.SurfsharkRetroLocChoices()...) //nolint:gocritic
+		err := atLeastOneIsOneOfCaseInsensitive(ss.Regions, newAndRetroRegions, warner)
 		if err != nil {
+			// Only return error comparing with newer regions, we don't want to confuse the user
+			// with the retro regions in the error message.
+			err = atLeastOneIsOneOfCaseInsensitive(ss.Regions, filterChoices.Regions, warner)
 			return models.FilterChoices{}, fmt.Errorf("%w: %w", ErrRegionNotValid, err)
 		}
 	}
@@ -178,85 +166,166 @@ func getLocationFilterChoices(vpnServiceProvider string,
 
 // validateServerFilters validates filters against the choices given as arguments.
 // Set an argument to nil to pass the check for a particular filter.
-func validateServerFilters(settings ServerSelection, filterChoices models.FilterChoices) (err error) {
-	err = validate.AreAllOneOfCaseInsensitive(settings.Countries, filterChoices.Countries)
+func validateServerFilters(settings ServerSelection, filterChoices models.FilterChoices,
+	vpnServiceProvider string, warner Warner,
+) (err error) {
+	err = atLeastOneIsOneOfCaseInsensitive(settings.Countries, filterChoices.Countries, warner)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrCountryNotValid, err)
 	}
 
-	err = validate.AreAllOneOfCaseInsensitive(settings.Regions, filterChoices.Regions)
+	err = atLeastOneIsOneOfCaseInsensitive(settings.Regions, filterChoices.Regions, warner)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrRegionNotValid, err)
 	}
 
-	err = validate.AreAllOneOfCaseInsensitive(settings.Cities, filterChoices.Cities)
+	err = atLeastOneIsOneOfCaseInsensitive(settings.Cities, filterChoices.Cities, warner)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrCityNotValid, err)
 	}
 
-	err = validate.AreAllOneOfCaseInsensitive(settings.ISPs, filterChoices.ISPs)
+	err = atLeastOneIsOneOfCaseInsensitive(settings.ISPs, filterChoices.ISPs, warner)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrISPNotValid, err)
 	}
 
-	err = validate.AreAllOneOfCaseInsensitive(settings.Hostnames, filterChoices.Hostnames)
+	err = atLeastOneIsOneOfCaseInsensitive(settings.Hostnames, filterChoices.Hostnames, warner)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrHostnameNotValid, err)
 	}
 
-	err = validate.AreAllOneOfCaseInsensitive(settings.Names, filterChoices.Names)
+	if vpnServiceProvider == providers.Custom {
+		switch len(settings.Names) {
+		case 0:
+		case 1:
+			// Allow a single name to be specified for the custom provider in case
+			// the user wants to use VPN server side port forwarding with PIA
+			// which requires a server name for TLS verification.
+			filterChoices.Names = settings.Names
+		default:
+			return fmt.Errorf("%w: %d names specified instead of "+
+				"0 or 1 for the custom provider",
+				ErrNameNotValid, len(settings.Names))
+		}
+	}
+	err = atLeastOneIsOneOfCaseInsensitive(settings.Names, filterChoices.Names, warner)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrNameNotValid, err)
+	}
+
+	err = atLeastOneIsOneOfCaseInsensitive(settings.Categories, filterChoices.Categories, warner)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrCategoryNotValid, err)
 	}
 
 	return nil
 }
 
-func (ss *ServerSelection) copy() (copied ServerSelection) {
-	return ServerSelection{
-		VPN:          ss.VPN,
-		TargetIP:     ss.TargetIP,
-		Countries:    gosettings.CopySlice(ss.Countries),
-		Regions:      gosettings.CopySlice(ss.Regions),
-		Cities:       gosettings.CopySlice(ss.Cities),
-		ISPs:         gosettings.CopySlice(ss.ISPs),
-		Hostnames:    gosettings.CopySlice(ss.Hostnames),
-		Names:        gosettings.CopySlice(ss.Names),
-		Numbers:      gosettings.CopySlice(ss.Numbers),
-		OwnedOnly:    gosettings.CopyPointer(ss.OwnedOnly),
-		FreeOnly:     gosettings.CopyPointer(ss.FreeOnly),
-		PremiumOnly:  gosettings.CopyPointer(ss.PremiumOnly),
-		StreamOnly:   gosettings.CopyPointer(ss.StreamOnly),
-		MultiHopOnly: gosettings.CopyPointer(ss.MultiHopOnly),
-		OpenVPN:      ss.OpenVPN.copy(),
-		Wireguard:    ss.Wireguard.copy(),
+func atLeastOneIsOneOfCaseInsensitive(values, choices []string,
+	warner Warner,
+) (err error) {
+	if len(values) > 0 && len(choices) == 0 {
+		return fmt.Errorf("%w", validate.ErrNoChoice)
+	}
+
+	set := make(map[string]struct{}, len(choices))
+	for _, choice := range choices {
+		lowercaseChoice := strings.ToLower(choice)
+		set[lowercaseChoice] = struct{}{}
+	}
+
+	invalidValues := make([]string, 0, len(values))
+	for _, value := range values {
+		lowercaseValue := strings.ToLower(value)
+		_, ok := set[lowercaseValue]
+		if ok {
+			continue
+		}
+		invalidValues = append(invalidValues, value)
+	}
+
+	switch len(invalidValues) {
+	case 0:
+		return nil
+	case len(values):
+		return fmt.Errorf("%w: none of %s is one of the choices available %s",
+			validate.ErrValueNotOneOf, strings.Join(values, ", "), strings.Join(choices, ", "))
+	default:
+		warner.Warn(fmt.Sprintf("values %s are not in choices %s",
+			strings.Join(invalidValues, ", "), strings.Join(choices, ", ")))
+	}
+
+	return nil
+}
+
+func validateSubscriptionTierFilters(settings ServerSelection, vpnServiceProvider string) error {
+	switch {
+	case *settings.FreeOnly &&
+		!helpers.IsOneOf(vpnServiceProvider, providers.Protonvpn, providers.VPNUnlimited):
+		return fmt.Errorf("%w", ErrFreeOnlyNotSupported)
+	case *settings.PremiumOnly &&
+		!helpers.IsOneOf(vpnServiceProvider, providers.VPNSecure):
+		return fmt.Errorf("%w", ErrPremiumOnlyNotSupported)
+	case *settings.FreeOnly && *settings.PremiumOnly:
+		return fmt.Errorf("%w", ErrFreePremiumBothSet)
+	default:
+		return nil
 	}
 }
 
-func (ss *ServerSelection) mergeWith(other ServerSelection) {
-	ss.VPN = gosettings.MergeWithString(ss.VPN, other.VPN)
-	ss.TargetIP = gosettings.MergeWithValidator(ss.TargetIP, other.TargetIP)
-	ss.Countries = gosettings.MergeWithSlice(ss.Countries, other.Countries)
-	ss.Regions = gosettings.MergeWithSlice(ss.Regions, other.Regions)
-	ss.Cities = gosettings.MergeWithSlice(ss.Cities, other.Cities)
-	ss.ISPs = gosettings.MergeWithSlice(ss.ISPs, other.ISPs)
-	ss.Hostnames = gosettings.MergeWithSlice(ss.Hostnames, other.Hostnames)
-	ss.Names = gosettings.MergeWithSlice(ss.Names, other.Names)
-	ss.Numbers = gosettings.MergeWithSlice(ss.Numbers, other.Numbers)
-	ss.OwnedOnly = gosettings.MergeWithPointer(ss.OwnedOnly, other.OwnedOnly)
-	ss.FreeOnly = gosettings.MergeWithPointer(ss.FreeOnly, other.FreeOnly)
-	ss.PremiumOnly = gosettings.MergeWithPointer(ss.PremiumOnly, other.PremiumOnly)
-	ss.StreamOnly = gosettings.MergeWithPointer(ss.StreamOnly, other.StreamOnly)
-	ss.MultiHopOnly = gosettings.MergeWithPointer(ss.MultiHopOnly, other.MultiHopOnly)
+func validateFeatureFilters(settings ServerSelection, vpnServiceProvider string) error {
+	switch {
+	case *settings.OwnedOnly && vpnServiceProvider != providers.Mullvad:
+		return fmt.Errorf("%w", ErrOwnedOnlyNotSupported)
+	case vpnServiceProvider == providers.Protonvpn && *settings.FreeOnly && *settings.PortForwardOnly:
+		return fmt.Errorf("%w: together with free only filter", ErrPortForwardOnlyNotSupported)
+	case *settings.StreamOnly &&
+		!helpers.IsOneOf(vpnServiceProvider, providers.Protonvpn, providers.VPNUnlimited):
+		return fmt.Errorf("%w", ErrStreamOnlyNotSupported)
+	case *settings.MultiHopOnly && vpnServiceProvider != providers.Surfshark:
+		return fmt.Errorf("%w", ErrMultiHopOnlyNotSupported)
+	case *settings.PortForwardOnly &&
+		!helpers.IsOneOf(vpnServiceProvider, providers.PrivateInternetAccess, providers.Protonvpn):
+		return fmt.Errorf("%w", ErrPortForwardOnlyNotSupported)
+	case *settings.SecureCoreOnly && vpnServiceProvider != providers.Protonvpn:
+		return fmt.Errorf("%w", ErrSecureCoreOnlyNotSupported)
+	case *settings.TorOnly && vpnServiceProvider != providers.Protonvpn:
+		return fmt.Errorf("%w", ErrTorOnlyNotSupported)
+	default:
+		return nil
+	}
+}
 
-	ss.OpenVPN.mergeWith(other.OpenVPN)
-	ss.Wireguard.mergeWith(other.Wireguard)
+func (ss *ServerSelection) copy() (copied ServerSelection) {
+	return ServerSelection{
+		VPN:             ss.VPN,
+		TargetIP:        ss.TargetIP,
+		Countries:       gosettings.CopySlice(ss.Countries),
+		Categories:      gosettings.CopySlice(ss.Categories),
+		Regions:         gosettings.CopySlice(ss.Regions),
+		Cities:          gosettings.CopySlice(ss.Cities),
+		ISPs:            gosettings.CopySlice(ss.ISPs),
+		Hostnames:       gosettings.CopySlice(ss.Hostnames),
+		Names:           gosettings.CopySlice(ss.Names),
+		Numbers:         gosettings.CopySlice(ss.Numbers),
+		OwnedOnly:       gosettings.CopyPointer(ss.OwnedOnly),
+		FreeOnly:        gosettings.CopyPointer(ss.FreeOnly),
+		PremiumOnly:     gosettings.CopyPointer(ss.PremiumOnly),
+		StreamOnly:      gosettings.CopyPointer(ss.StreamOnly),
+		SecureCoreOnly:  gosettings.CopyPointer(ss.SecureCoreOnly),
+		TorOnly:         gosettings.CopyPointer(ss.TorOnly),
+		PortForwardOnly: gosettings.CopyPointer(ss.PortForwardOnly),
+		MultiHopOnly:    gosettings.CopyPointer(ss.MultiHopOnly),
+		OpenVPN:         ss.OpenVPN.copy(),
+		Wireguard:       ss.Wireguard.copy(),
+	}
 }
 
 func (ss *ServerSelection) overrideWith(other ServerSelection) {
-	ss.VPN = gosettings.OverrideWithString(ss.VPN, other.VPN)
+	ss.VPN = gosettings.OverrideWithComparable(ss.VPN, other.VPN)
 	ss.TargetIP = gosettings.OverrideWithValidator(ss.TargetIP, other.TargetIP)
 	ss.Countries = gosettings.OverrideWithSlice(ss.Countries, other.Countries)
+	ss.Categories = gosettings.OverrideWithSlice(ss.Categories, other.Categories)
 	ss.Regions = gosettings.OverrideWithSlice(ss.Regions, other.Regions)
 	ss.Cities = gosettings.OverrideWithSlice(ss.Cities, other.Cities)
 	ss.ISPs = gosettings.OverrideWithSlice(ss.ISPs, other.ISPs)
@@ -267,19 +336,30 @@ func (ss *ServerSelection) overrideWith(other ServerSelection) {
 	ss.FreeOnly = gosettings.OverrideWithPointer(ss.FreeOnly, other.FreeOnly)
 	ss.PremiumOnly = gosettings.OverrideWithPointer(ss.PremiumOnly, other.PremiumOnly)
 	ss.StreamOnly = gosettings.OverrideWithPointer(ss.StreamOnly, other.StreamOnly)
+	ss.SecureCoreOnly = gosettings.OverrideWithPointer(ss.SecureCoreOnly, other.SecureCoreOnly)
+	ss.TorOnly = gosettings.OverrideWithPointer(ss.TorOnly, other.TorOnly)
 	ss.MultiHopOnly = gosettings.OverrideWithPointer(ss.MultiHopOnly, other.MultiHopOnly)
+	ss.PortForwardOnly = gosettings.OverrideWithPointer(ss.PortForwardOnly, other.PortForwardOnly)
 	ss.OpenVPN.overrideWith(other.OpenVPN)
 	ss.Wireguard.overrideWith(other.Wireguard)
 }
 
-func (ss *ServerSelection) setDefaults(vpnProvider string) {
-	ss.VPN = gosettings.DefaultString(ss.VPN, vpn.OpenVPN)
+func (ss *ServerSelection) setDefaults(vpnProvider string, portForwardingEnabled bool) {
+	ss.VPN = gosettings.DefaultComparable(ss.VPN, vpn.OpenVPN)
 	ss.TargetIP = gosettings.DefaultValidator(ss.TargetIP, netip.IPv4Unspecified())
 	ss.OwnedOnly = gosettings.DefaultPointer(ss.OwnedOnly, false)
 	ss.FreeOnly = gosettings.DefaultPointer(ss.FreeOnly, false)
 	ss.PremiumOnly = gosettings.DefaultPointer(ss.PremiumOnly, false)
 	ss.StreamOnly = gosettings.DefaultPointer(ss.StreamOnly, false)
+	ss.SecureCoreOnly = gosettings.DefaultPointer(ss.SecureCoreOnly, false)
+	ss.TorOnly = gosettings.DefaultPointer(ss.TorOnly, false)
 	ss.MultiHopOnly = gosettings.DefaultPointer(ss.MultiHopOnly, false)
+	defaultPortForwardOnly := false
+	if portForwardingEnabled && helpers.IsOneOf(vpnProvider,
+		providers.PrivateInternetAccess, providers.Protonvpn) {
+		defaultPortForwardOnly = true
+	}
+	ss.PortForwardOnly = gosettings.DefaultPointer(ss.PortForwardOnly, defaultPortForwardOnly)
 	ss.OpenVPN.setDefaults(vpnProvider)
 	ss.Wireguard.setDefaults()
 }
@@ -297,6 +377,10 @@ func (ss ServerSelection) toLinesNode() (node *gotree.Node) {
 
 	if len(ss.Countries) > 0 {
 		node.Appendf("Countries: %s", strings.Join(ss.Countries, ", "))
+	}
+
+	if len(ss.Categories) > 0 {
+		node.Appendf("Categories: %s", strings.Join(ss.Categories, ", "))
 	}
 
 	if len(ss.Regions) > 0 {
@@ -342,8 +426,20 @@ func (ss ServerSelection) toLinesNode() (node *gotree.Node) {
 		node.Appendf("Stream only servers: yes")
 	}
 
+	if *ss.SecureCoreOnly {
+		node.Appendf("Secure Core only servers: yes")
+	}
+
+	if *ss.TorOnly {
+		node.Appendf("Tor only servers: yes")
+	}
+
 	if *ss.MultiHopOnly {
 		node.Appendf("Multi-hop only servers: yes")
+	}
+
+	if *ss.PortForwardOnly {
+		node.Appendf("Port forwarding only servers: yes")
 	}
 
 	if ss.VPN == vpn.OpenVPN {
@@ -358,6 +454,96 @@ func (ss ServerSelection) toLinesNode() (node *gotree.Node) {
 // WithDefaults is a shorthand using setDefaults.
 // It's used in unit tests in other packages.
 func (ss ServerSelection) WithDefaults(provider string) ServerSelection {
-	ss.setDefaults(provider)
+	const portForwardingEnabled = false
+	ss.setDefaults(provider, portForwardingEnabled)
 	return ss
+}
+
+func (ss *ServerSelection) read(r *reader.Reader,
+	vpnProvider, vpnType string,
+) (err error) {
+	ss.VPN = vpnType
+
+	ss.TargetIP, err = r.NetipAddr("OPENVPN_ENDPOINT_IP",
+		reader.RetroKeys("OPENVPN_TARGET_IP", "VPN_ENDPOINT_IP"))
+	if err != nil {
+		return err
+	}
+
+	countriesRetroKeys := []string{"COUNTRY"}
+	if vpnProvider == providers.Cyberghost {
+		countriesRetroKeys = append(countriesRetroKeys, "REGION")
+	}
+	ss.Countries = r.CSV("SERVER_COUNTRIES", reader.RetroKeys(countriesRetroKeys...))
+
+	ss.Regions = r.CSV("SERVER_REGIONS", reader.RetroKeys("REGION"))
+	ss.Cities = r.CSV("SERVER_CITIES", reader.RetroKeys("CITY"))
+	ss.ISPs = r.CSV("ISP")
+	ss.Hostnames = r.CSV("SERVER_HOSTNAMES", reader.RetroKeys("SERVER_HOSTNAME"))
+	ss.Names = r.CSV("SERVER_NAMES", reader.RetroKeys("SERVER_NAME"))
+	ss.Numbers, err = r.CSVUint16("SERVER_NUMBER")
+	ss.Categories = r.CSV("SERVER_CATEGORIES")
+	if err != nil {
+		return err
+	}
+
+	// Mullvad only
+	ss.OwnedOnly, err = r.BoolPtr("OWNED_ONLY", reader.RetroKeys("OWNED"))
+	if err != nil {
+		return err
+	}
+
+	// VPNUnlimited and ProtonVPN only
+	ss.FreeOnly, err = r.BoolPtr("FREE_ONLY")
+	if err != nil {
+		return err
+	}
+
+	// VPNSecure only
+	ss.PremiumOnly, err = r.BoolPtr("PREMIUM_ONLY")
+	if err != nil {
+		return err
+	}
+
+	// Surfshark only
+	ss.MultiHopOnly, err = r.BoolPtr("MULTIHOP_ONLY")
+	if err != nil {
+		return err
+	}
+
+	// VPNUnlimited and ProtonVPN only
+	ss.StreamOnly, err = r.BoolPtr("STREAM_ONLY")
+	if err != nil {
+		return err
+	}
+
+	// ProtonVPN only
+	ss.SecureCoreOnly, err = r.BoolPtr("SECURE_CORE_ONLY")
+	if err != nil {
+		return err
+	}
+
+	// ProtonVPN only
+	ss.TorOnly, err = r.BoolPtr("TOR_ONLY")
+	if err != nil {
+		return err
+	}
+
+	// PIA and ProtonVPN only
+	ss.PortForwardOnly, err = r.BoolPtr("PORT_FORWARD_ONLY")
+	if err != nil {
+		return err
+	}
+
+	err = ss.OpenVPN.read(r)
+	if err != nil {
+		return err
+	}
+
+	err = ss.Wireguard.read(r)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

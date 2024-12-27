@@ -9,12 +9,18 @@ import (
 
 	"github.com/qdm12/gluetun/internal/models"
 	"github.com/qdm12/gluetun/internal/provider/common"
+	"github.com/qdm12/gluetun/internal/publicip/api"
 	"github.com/qdm12/gluetun/internal/updater/openvpn"
 )
 
 func (u *Updater) FetchServers(ctx context.Context, minServers int) (
-	servers []models.Server, err error) {
-	const url = "https://d32d3g1fvkpl8y.cloudfront.net/heartbleed/windows/New+OVPN+Files.zip"
+	servers []models.Server, err error,
+) {
+	if !u.ipFetcher.CanFetchAnyIP() {
+		return nil, fmt.Errorf("%w: %s", common.ErrIPFetcherUnsupported, u.ipFetcher.String())
+	}
+
+	const url = "https://d11a57lttb2ffq.cloudfront.net/heartbleed/router/Recommended-CA2.zip"
 	contents, err := u.unzipper.FetchAndExtract(ctx, url)
 	if err != nil {
 		return nil, err
@@ -80,7 +86,7 @@ func (u *Updater) FetchServers(ctx context.Context, minServers int) (
 	for i := range servers {
 		ipsToGetInfo[i] = servers[i].IPs[0]
 	}
-	ipsInfo, err := u.ipFetcher.FetchMultiInfo(ctx, ipsToGetInfo)
+	ipsInfo, err := api.FetchMultiInfo(ctx, u.ipFetcher, ipsToGetInfo)
 	if err != nil {
 		return nil, err
 	}

@@ -11,13 +11,17 @@ import (
 	"github.com/qdm12/gluetun/internal/models"
 )
 
-var (
-	errRemoteLineNotFound = errors.New("remote line not found")
-)
+var errRemoteLineNotFound = errors.New("remote line not found")
 
 func extractDataFromLines(lines []string) (
-	connection models.Connection, err error) {
+	connection models.Connection, err error,
+) {
 	for i, line := range lines {
+		hashSymbolIndex := strings.Index(line, "#")
+		if hashSymbolIndex >= 0 {
+			line = line[:hashSymbolIndex]
+		}
+
 		ip, port, protocol, err := extractDataFromLine(line)
 		if err != nil {
 			return connection, fmt.Errorf("on line %d: %w", i+1, err)
@@ -40,7 +44,7 @@ func extractDataFromLines(lines []string) (
 
 	if connection.Port == 0 {
 		connection.Port = 1194
-		if connection.Protocol == constants.TCP {
+		if strings.HasPrefix(connection.Protocol, "tcp") {
 			connection.Port = 443
 		}
 	}
@@ -49,7 +53,8 @@ func extractDataFromLines(lines []string) (
 }
 
 func extractDataFromLine(line string) (
-	ip netip.Addr, port uint16, protocol string, err error) {
+	ip netip.Addr, port uint16, protocol string, err error,
+) {
 	switch {
 	case strings.HasPrefix(line, "proto "):
 		protocol, err = extractProto(line)
@@ -64,6 +69,13 @@ func extractDataFromLine(line string) (
 			return ip, 0, "", fmt.Errorf("extracting from remote line: %w", err)
 		}
 		return ip, port, protocol, nil
+
+	case strings.HasPrefix(line, "port "):
+		port, err = extractPort(line)
+		if err != nil {
+			return ip, 0, "", fmt.Errorf("extracting from port line: %w", err)
+		}
+		return ip, port, "", nil
 	}
 
 	return ip, 0, "", nil
@@ -76,12 +88,12 @@ var (
 
 func extractProto(line string) (protocol string, err error) {
 	fields := strings.Fields(line)
-	if len(fields) != 2 { //nolint:gomnd
+	if len(fields) != 2 { //nolint:mnd
 		return "", fmt.Errorf("%w: %s", errProtoLineFieldsCount, line)
 	}
 
 	switch fields[1] {
-	case "tcp", "tcp4", "tcp6", "udp", "udp4", "udp6":
+	case "tcp", "tcp4", "tcp6", "tcp-client", "udp", "udp4", "udp6":
 	default:
 		return "", fmt.Errorf("%w: %s", errProtocolNotSupported, fields[1])
 	}
@@ -96,7 +108,8 @@ var (
 )
 
 func extractRemote(line string) (ip netip.Addr, port uint16,
-	protocol string, err error) {
+	protocol string, err error,
+) {
 	fields := strings.Fields(line)
 	n := len(fields)
 
@@ -112,7 +125,7 @@ func extractRemote(line string) (ip netip.Addr, port uint16,
 		// the firewall before the VPN is up.
 	}
 
-	if n > 2 { //nolint:gomnd
+	if n > 2 { //nolint:mnd
 		portInt, err := strconv.Atoi(fields[2])
 		if err != nil {
 			return netip.Addr{}, 0, "", fmt.Errorf("%w: %s", errPortNotValid, line)
@@ -122,7 +135,7 @@ func extractRemote(line string) (ip netip.Addr, port uint16,
 		port = uint16(portInt)
 	}
 
-	if n > 3 { //nolint:gomnd
+	if n > 3 { //nolint:mnd
 		switch fields[3] {
 		case "tcp", "udp":
 			protocol = fields[3]
@@ -132,4 +145,24 @@ func extractRemote(line string) (ip netip.Addr, port uint16,
 	}
 
 	return ip, port, protocol, nil
+}
+
+var errPostLineFieldsCount = errors.New("post line has not 2 fields as expected")
+
+func extractPort(line string) (port uint16, err error) {
+	fields := strings.Fields(line)
+	const expectedFieldsCount = 2
+	if len(fields) != expectedFieldsCount {
+		return 0, fmt.Errorf("%w: %s", errPostLineFieldsCount, line)
+	}
+
+	portInt, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return 0, fmt.Errorf("%w: %s", errPortNotValid, line)
+	} else if portInt < 1 || portInt > 65535 {
+		return 0, fmt.Errorf("%w: %d must be between 1 and 65535", errPortNotValid, portInt)
+	}
+	port = uint16(portInt)
+
+	return port, nil
 }

@@ -48,7 +48,9 @@ func (r *Routing) LocalNetworks() (localNetworks []LocalNetwork, err error) {
 	}
 
 	for _, route := range routes {
-		if route.Table != unix.RT_TABLE_MAIN || route.Gw.IsValid() || !route.Dst.IsValid() {
+		if route.Table != unix.RT_TABLE_MAIN ||
+			(route.Gw.IsValid() && !route.Gw.IsUnspecified()) ||
+			(route.Dst.IsValid() && route.Dst.Addr().IsUnspecified()) {
 			continue
 		} else if _, ok := localLinks[route.LinkIndex]; !ok {
 			continue
@@ -70,7 +72,7 @@ func (r *Routing) LocalNetworks() (localNetworks []LocalNetwork, err error) {
 		if localNet.IPNet.Addr().Is4() {
 			family = netlink.FamilyV4
 		}
-		ip, err := r.assignedIP(localNet.InterfaceName, family)
+		ip, err := r.AssignedIP(localNet.InterfaceName, family)
 		if err != nil {
 			return localNetworks, err
 		}

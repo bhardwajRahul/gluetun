@@ -8,7 +8,8 @@ import (
 )
 
 func newHandlerV0(ctx context.Context, logger infoWarner,
-	vpn VPNLooper, dns DNSLoop, updater UpdaterLooper) http.Handler {
+	vpn VPNLooper, dns DNSLoop, updater UpdaterLooper,
+) http.Handler {
 	return &handlerV0{
 		ctx:     ctx,
 		logger:  logger,
@@ -42,7 +43,7 @@ func (h *handlerV0) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if _, err := w.Write([]byte("openvpn restarted, please consider using the /v1/ API in the future.")); err != nil {
 			h.logger.Warn(err.Error())
 		}
-	case "/unbound/actions/restart":
+	case "/unbound/actions/restart": // TODO v4 change to /dns/
 		outcome, _ := h.dns.ApplyStatus(h.ctx, constants.Stopped)
 		h.logger.Info("dns: " + outcome)
 		outcome, _ = h.dns.ApplyStatus(h.ctx, constants.Running)

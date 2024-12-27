@@ -3,15 +3,19 @@ package vpn
 import (
 	"context"
 
+	"github.com/qdm12/dns/v2/pkg/check"
 	"github.com/qdm12/gluetun/internal/constants"
 	"github.com/qdm12/gluetun/internal/version"
 )
 
 type tunnelUpData struct {
 	// Port forwarding
-	vpnIntf       string
-	serverName    string
-	portForwarder PortForwarder
+	vpnIntf        string
+	serverName     string // used for PIA
+	canPortForward bool   // used for PIA
+	username       string // used for PIA
+	password       string // used for PIA
+	portForwarder  PortForwarder
 }
 
 func (l *Loop) onTunnelUp(ctx context.Context, data tunnelUpData) {
@@ -26,9 +30,17 @@ func (l *Loop) onTunnelUp(ctx context.Context, data tunnelUpData) {
 
 	if *l.dnsLooper.GetSettings().DoT.Enabled {
 		_, _ = l.dnsLooper.ApplyStatus(ctx, constants.Running)
+	} else {
+		err := check.WaitForDNS(ctx, check.Settings{})
+		if err != nil {
+			l.logger.Error("waiting for DNS to be ready: " + err.Error())
+		}
 	}
 
-	l.publicip.StartSingleRun()
+	err := l.publicip.RunOnce(ctx)
+	if err != nil {
+		l.logger.Error("getting public IP address information: " + err.Error())
+	}
 
 	if l.versionInfo {
 		l.versionInfo = false // only get the version information once
@@ -40,7 +52,7 @@ func (l *Loop) onTunnelUp(ctx context.Context, data tunnelUpData) {
 		}
 	}
 
-	err := l.startPortForwarding(data)
+	err = l.startPortForwarding(data)
 	if err != nil {
 		l.logger.Error(err.Error())
 	}

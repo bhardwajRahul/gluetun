@@ -49,7 +49,8 @@ func Test_Client_AddPortMapping(t *testing.T) {
 			initialConnectionDuration: time.Millisecond,
 			exchanges:                 []udpExchange{{close: true}},
 			err:                       ErrConnectionTimeout,
-			errMessage:                "executing remote procedure call: connection timeout: after 1ms",
+			errMessage: "executing remote procedure call: connection timeout: failed attempts: " +
+				"read udp 127.0.0.1:[1-9][0-9]{0,4}->127.0.0.1:[1-9][0-9]{0,4}: i/o timeout \\(try 1\\)",
 		},
 		"add_udp": {
 			ctx:                       context.Background(),
@@ -114,23 +115,21 @@ func Test_Client_AddPortMapping(t *testing.T) {
 	}
 
 	for name, testCase := range testCases {
-		testCase := testCase
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
 			remoteAddress := launchUDPServer(t, testCase.exchanges)
 
 			client := Client{
-				serverPort:                uint16(remoteAddress.Port),
+				serverPort:                uint16(remoteAddress.Port), //nolint:gosec
 				initialConnectionDuration: testCase.initialConnectionDuration,
 				maxRetries:                1,
 			}
 
 			durationSinceStartOfEpoch, assignedInternalPort,
-				assignedExternalPort, assignedLifetime, err :=
-				client.AddPortMapping(testCase.ctx, testCase.gateway,
-					testCase.protocol, testCase.internalPort,
-					testCase.requestedExternalPort, testCase.lifetime)
+				assignedExternalPort, assignedLifetime, err := client.AddPortMapping(testCase.ctx, testCase.gateway,
+				testCase.protocol, testCase.internalPort,
+				testCase.requestedExternalPort, testCase.lifetime)
 
 			assert.Equal(t, testCase.durationSinceStartOfEpoch, durationSinceStartOfEpoch)
 			assert.Equal(t, testCase.assignedInternalPort, assignedInternalPort)

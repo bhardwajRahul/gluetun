@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/qdm12/gluetun/internal/configuration/settings"
+	"github.com/qdm12/gluetun/internal/constants"
 	"github.com/qdm12/gluetun/internal/constants/providers"
 	"github.com/qdm12/gluetun/internal/constants/vpn"
 	"github.com/qdm12/gluetun/internal/models"
@@ -14,7 +15,8 @@ import (
 // to the given selection. The filtered servers are deep copied so they
 // are safe for mutation by the caller.
 func (s *Storage) FilterServers(provider string, selection settings.ServerSelection) (
-	servers []models.Server, err error) {
+	servers []models.Server, err error,
+) {
 	if provider == providers.Custom {
 		return nil, nil
 	}
@@ -46,7 +48,8 @@ func (s *Storage) FilterServers(provider string, selection settings.ServerSelect
 }
 
 func filterServer(server models.Server,
-	selection settings.ServerSelection) (filtered bool) {
+	selection settings.ServerSelection,
+) (filtered bool) {
 	// Note each condition is split to make sure
 	// we have full testing coverage.
 	if server.VPN != selection.VPN {
@@ -74,7 +77,23 @@ func filterServer(server models.Server,
 		return true
 	}
 
+	if *selection.PortForwardOnly && !server.PortForward {
+		return true
+	}
+
+	if *selection.SecureCoreOnly && !server.SecureCore {
+		return true
+	}
+
+	if *selection.TorOnly && !server.Tor {
+		return true
+	}
+
 	if filterByPossibilities(server.Country, selection.Countries) {
+		return true
+	}
+
+	if filterAnyByPossibilities(server.Categories, selection.Categories) {
 		return true
 	}
 
@@ -119,13 +138,28 @@ func filterByPossibilities[T string | uint16](value T, possibilities []T) (filte
 	return true
 }
 
+func filterAnyByPossibilities(values, possibilities []string) (filtered bool) {
+	if len(possibilities) == 0 {
+		return false
+	}
+
+	for _, value := range values {
+		if !filterByPossibilities(value, possibilities) {
+			return false // found a valid value
+		}
+	}
+
+	return true
+}
+
 func filterByProtocol(selection settings.ServerSelection,
-	serverTCP, serverUDP bool) (filtered bool) {
+	serverTCP, serverUDP bool,
+) (filtered bool) {
 	switch selection.VPN {
 	case vpn.Wireguard:
 		return !serverUDP
 	default: // OpenVPN
-		wantTCP := *selection.OpenVPN.TCP
+		wantTCP := selection.OpenVPN.Protocol == constants.TCP
 		wantUDP := !wantTCP
 		return (wantTCP && !serverTCP) || (wantUDP && !serverUDP)
 	}

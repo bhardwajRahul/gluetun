@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/qdm12/gluetun/internal/constants"
+	"github.com/qdm12/gluetun/internal/constants/vpn"
 )
 
 func newOpenvpnHandler(ctx context.Context, looper VPNLooper,
-	pfGetter PortForwardedGetter, w warner) http.Handler {
+	pfGetter PortForwardedGetter, w warner,
+) http.Handler {
 	return &openvpnHandler{
 		ctx:    ctx,
 		looper: looper,
@@ -34,31 +38,38 @@ func (h *openvpnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case http.MethodPut:
 			h.setStatus(w, r)
 		default:
-			http.Error(w, "method "+r.Method+" not supported", http.StatusBadRequest)
+			errMethodNotSupported(w, r.Method)
 		}
 	case "/settings":
 		switch r.Method {
 		case http.MethodGet:
 			h.getSettings(w)
 		default:
-			http.Error(w, "method "+r.Method+" not supported", http.StatusBadRequest)
+			errMethodNotSupported(w, r.Method)
 		}
 	case "/portforwarded":
 		switch r.Method {
 		case http.MethodGet:
 			h.getPortForwarded(w)
 		default:
-			http.Error(w, "method "+r.Method+" not supported", http.StatusBadRequest)
+			errMethodNotSupported(w, r.Method)
 		}
 	default:
-		http.Error(w, "route "+r.RequestURI+" not supported", http.StatusBadRequest)
+		errRouteNotSupported(w, r.RequestURI)
 	}
 }
 
 func (h *openvpnHandler) getStatus(w http.ResponseWriter) {
-	status := h.looper.GetStatus()
+	vpnStatus := h.looper.GetStatus()
+	openVPNStatus := vpnStatus
+	if vpnStatus != constants.Stopped {
+		vpnSettings := h.looper.GetSettings()
+		if vpnSettings.Type != vpn.OpenVPN {
+			openVPNStatus = constants.Stopped
+		}
+	}
 	encoder := json.NewEncoder(w)
-	data := statusWrapper{Status: string(status)}
+	data := statusWrapper{Status: string(openVPNStatus)}
 	if err := encoder.Encode(data); err != nil {
 		h.warner.Warn(err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
@@ -78,10 +89,20 @@ func (h *openvpnHandler) setStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	outcome, err := h.looper.ApplyStatus(h.ctx, status)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+
+	var outcome string
+	loopSettings := h.looper.GetSettings()
+	if status == constants.Running && loopSettings.Type != vpn.OpenVPN {
+		// Stop Wireguard if it was the selected type and we want to start OpenVPN
+		loopSettings.Type = vpn.OpenVPN
+		outcome = h.looper.SetSettings(h.ctx, loopSettings)
+	} else {
+		// Only update status of OpenVPN
+		outcome, err = h.looper.ApplyStatus(h.ctx, status)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 	encoder := json.NewEncoder(w)
 	if err := encoder.Encode(outcomeWrapper{Outcome: outcome}); err != nil {
@@ -103,12 +124,21 @@ func (h *openvpnHandler) getSettings(w http.ResponseWriter) {
 }
 
 func (h *openvpnHandler) getPortForwarded(w http.ResponseWriter) {
-	port := h.pf.GetPortForwarded()
+	ports := h.pf.GetPortsForwarded()
 	encoder := json.NewEncoder(w)
-	data := portWrapper{Port: port}
-	if err := encoder.Encode(data); err != nil {
+	var data any
+	switch len(ports) {
+	case 0:
+		data = portWrapper{Port: 0} // TODO v4 change to portsWrapper
+	case 1:
+		data = portWrapper{Port: ports[0]} // TODO v4 change to portsWrapper
+	default:
+		data = portsWrapper{Ports: ports}
+	}
+
+	err := encoder.Encode(data)
+	if err != nil {
 		h.warner.Warn(err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
-		return
 	}
 }

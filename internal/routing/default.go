@@ -9,9 +9,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-var (
-	ErrRouteDefaultNotFound = errors.New("default route not found")
-)
+var ErrRouteDefaultNotFound = errors.New("default route not found")
 
 type DefaultRoute struct {
 	NetInterface string
@@ -36,7 +34,7 @@ func (r *Routing) DefaultRoutes() (defaultRoutes []DefaultRoute, err error) {
 			// ignore non-main table
 			continue
 		}
-		if route.Dst.IsValid() {
+		if route.Dst.IsValid() && !route.Dst.Addr().IsUnspecified() {
 			continue
 		}
 		defaultRoute := DefaultRoute{
@@ -53,7 +51,7 @@ func (r *Routing) DefaultRoutes() (defaultRoutes []DefaultRoute, err error) {
 		if route.Gw.Is4() {
 			family = netlink.FamilyV4
 		}
-		defaultRoute.AssignedIP, err = r.assignedIP(defaultRoute.NetInterface, family)
+		defaultRoute.AssignedIP, err = r.AssignedIP(defaultRoute.NetInterface, family)
 		if err != nil {
 			return nil, fmt.Errorf("getting assigned IP of %s: %w", defaultRoute.NetInterface, err)
 		}

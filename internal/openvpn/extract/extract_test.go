@@ -65,7 +65,6 @@ func Test_extractDataFromLines(t *testing.T) {
 	}
 
 	for name, testCase := range testCases {
-		testCase := testCase
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -104,6 +103,10 @@ func Test_extractDataFromLine(t *testing.T) {
 			line:     "proto tcp",
 			protocol: constants.TCP,
 		},
+		"tcp-client": {
+			line:     "proto tcp-client",
+			protocol: "tcp-client",
+		},
 		"extract remote error": {
 			line:  "remote bad",
 			isErr: errHostNotIP,
@@ -114,10 +117,17 @@ func Test_extractDataFromLine(t *testing.T) {
 			port:     1194,
 			protocol: constants.UDP,
 		},
+		"extract_port_fail": {
+			line:  "port a",
+			isErr: errPortNotValid,
+		},
+		"extract_port_success": {
+			line: "port 1194",
+			port: 1194,
+		},
 	}
 
 	for name, testCase := range testCases {
-		testCase := testCase
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -163,7 +173,6 @@ func Test_extractProto(t *testing.T) {
 	}
 
 	for name, testCase := range testCases {
-		testCase := testCase
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -241,7 +250,6 @@ func Test_extractRemote(t *testing.T) {
 	}
 
 	for name, testCase := range testCases {
-		testCase := testCase
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 

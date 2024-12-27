@@ -60,6 +60,8 @@ func Test_Server_Equal(t *testing.T) {
 				WgPubKey:    "wgpubkey",
 				Free:        true,
 				Stream:      true,
+				SecureCore:  true,
+				Tor:         true,
 				PortForward: true,
 				IPs:         []netip.Addr{netip.AddrFrom4([4]byte{1, 2, 3, 4})},
 				Keep:        true,
@@ -82,6 +84,8 @@ func Test_Server_Equal(t *testing.T) {
 				WgPubKey:    "wgpubkey",
 				Free:        true,
 				Stream:      true,
+				SecureCore:  true,
+				Tor:         true,
 				PortForward: true,
 				IPs:         []netip.Addr{netip.AddrFrom4([4]byte{1, 2, 3, 4})},
 				Keep:        true,
@@ -99,7 +103,6 @@ func Test_Server_Equal(t *testing.T) {
 	}
 
 	for name, testCase := range testCases {
-		testCase := testCase
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 

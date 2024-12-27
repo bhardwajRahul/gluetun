@@ -8,12 +8,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/qdm12/gluetun/internal/configuration/settings"
 	"github.com/qdm12/gluetun/internal/constants"
+	"github.com/qdm12/gluetun/internal/models"
 	"github.com/qdm12/gluetun/internal/openvpn/extract"
 	"github.com/qdm12/gluetun/internal/provider"
-	"github.com/qdm12/gluetun/internal/publicip/ipinfo"
 	"github.com/qdm12/gluetun/internal/storage"
 	"github.com/qdm12/gluetun/internal/updater/resolver"
+	"github.com/qdm12/gosettings/reader"
 )
 
 type OpenvpnConfigLogger interface {
@@ -32,31 +34,36 @@ type ParallelResolver interface {
 }
 
 type IPFetcher interface {
-	FetchMultiInfo(ctx context.Context, ips []netip.Addr) (data []ipinfo.Response, err error)
+	String() string
+	CanFetchAnyIP() bool
+	FetchInfo(ctx context.Context, ip netip.Addr) (data models.PublicIP, err error)
 }
 
 type IPv6Checker interface {
 	IsIPv6Supported() (supported bool, err error)
 }
 
-func (c *CLI) OpenvpnConfig(logger OpenvpnConfigLogger, source Source,
-	ipv6Checker IPv6Checker) error {
+func (c *CLI) OpenvpnConfig(logger OpenvpnConfigLogger, reader *reader.Reader,
+	ipv6Checker IPv6Checker,
+) error {
 	storage, err := storage.New(logger, constants.ServersData)
 	if err != nil {
 		return err
 	}
 
-	allSettings, err := source.Read()
+	var allSettings settings.Settings
+	err = allSettings.Read(reader, logger)
 	if err != nil {
 		return err
 	}
+	allSettings.SetDefaults()
 
 	ipv6Supported, err := ipv6Checker.IsIPv6Supported()
 	if err != nil {
 		return fmt.Errorf("checking for IPv6 support: %w", err)
 	}
 
-	if err = allSettings.Validate(storage, ipv6Supported); err != nil {
+	if err = allSettings.Validate(storage, ipv6Supported, logger); err != nil {
 		return fmt.Errorf("validating settings: %w", err)
 	}
 
@@ -70,7 +77,7 @@ func (c *CLI) OpenvpnConfig(logger OpenvpnConfigLogger, source Source,
 
 	providers := provider.NewProviders(storage, time.Now, warner, client,
 		unzipper, parallelResolver, ipFetcher, openvpnFileExtractor)
-	providerConf := providers.Get(*allSettings.VPN.Provider.Name)
+	providerConf := providers.Get(allSettings.VPN.Provider.Name)
 	connection, err := providerConf.GetConnection(
 		allSettings.VPN.Provider.ServerSelection, ipv6Supported)
 	if err != nil {

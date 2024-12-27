@@ -45,7 +45,7 @@ func Test_Updater_GetServers(t *testing.T) {
 		err     error
 	}{
 		"http response error": {
-			warnerBuilder:  func(ctrl *gomock.Controller) common.Warner { return nil },
+			warnerBuilder:  func(_ *gomock.Controller) common.Warner { return nil },
 			responseStatus: http.StatusNoContent,
 			err:            errors.New("fetching API: HTTP status code not OK: 204 No Content"),
 		},
@@ -77,7 +77,7 @@ func Test_Updater_GetServers(t *testing.T) {
 		},
 		"not enough servers": {
 			minServers:    2,
-			warnerBuilder: func(ctrl *gomock.Controller) common.Warner { return nil },
+			warnerBuilder: func(_ *gomock.Controller) common.Warner { return nil },
 			responseBody: `{"servers":[
 				{"hostnames":{"openvpn":"hosta"}}
 			]}`,
@@ -116,22 +116,27 @@ func Test_Updater_GetServers(t *testing.T) {
 			},
 			resolveWarnings: []string{"resolve warning"},
 			servers: []models.Server{
-				{VPN: vpn.OpenVPN, Country: "Country1",
+				{
+					VPN: vpn.OpenVPN, Country: "Country1",
 					City: "City A", Hostname: "hosta", TCP: true, UDP: true,
-					IPs: []netip.Addr{netip.AddrFrom4([4]byte{1, 1, 1, 1}), netip.AddrFrom4([4]byte{2, 2, 2, 2})}},
-				{VPN: vpn.OpenVPN, Country: "Country2",
+					IPs: []netip.Addr{netip.AddrFrom4([4]byte{1, 1, 1, 1}), netip.AddrFrom4([4]byte{2, 2, 2, 2})},
+				},
+				{
+					VPN: vpn.OpenVPN, Country: "Country2",
 					City: "City B", Hostname: "hostb", TCP: true, UDP: true,
-					IPs: []netip.Addr{netip.AddrFrom4([4]byte{3, 3, 3, 3}), netip.AddrFrom4([4]byte{4, 4, 4, 4})}},
-				{VPN: vpn.Wireguard,
+					IPs: []netip.Addr{netip.AddrFrom4([4]byte{3, 3, 3, 3}), netip.AddrFrom4([4]byte{4, 4, 4, 4})},
+				},
+				{
+					VPN:     vpn.Wireguard,
 					Country: "Country3", City: "City C",
 					Hostname: "hostc",
 					WgPubKey: "xyz",
-					IPs:      []netip.Addr{netip.AddrFrom4([4]byte{5, 5, 5, 5}), netip.AddrFrom4([4]byte{6, 6, 6, 6})}},
+					IPs:      []netip.Addr{netip.AddrFrom4([4]byte{5, 5, 5, 5}), netip.AddrFrom4([4]byte{6, 6, 6, 6})},
+				},
 			},
 		},
 	}
 	for name, testCase := range testCases {
-		testCase := testCase
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			ctrl := gomock.NewController(t)

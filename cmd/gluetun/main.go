@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -13,13 +15,11 @@ import (
 	_ "time/tzdata"
 
 	_ "github.com/breml/rootcerts"
-	"github.com/qdm12/dns/pkg/unbound"
 	"github.com/qdm12/gluetun/internal/alpine"
 	"github.com/qdm12/gluetun/internal/cli"
+	"github.com/qdm12/gluetun/internal/command"
 	"github.com/qdm12/gluetun/internal/configuration/settings"
-	"github.com/qdm12/gluetun/internal/configuration/sources/env"
 	"github.com/qdm12/gluetun/internal/configuration/sources/files"
-	mux "github.com/qdm12/gluetun/internal/configuration/sources/merge"
 	"github.com/qdm12/gluetun/internal/configuration/sources/secrets"
 	"github.com/qdm12/gluetun/internal/constants"
 	"github.com/qdm12/gluetun/internal/dns"
@@ -34,7 +34,6 @@ import (
 	"github.com/qdm12/gluetun/internal/pprof"
 	"github.com/qdm12/gluetun/internal/provider"
 	"github.com/qdm12/gluetun/internal/publicip"
-	"github.com/qdm12/gluetun/internal/publicip/ipinfo"
 	"github.com/qdm12/gluetun/internal/routing"
 	"github.com/qdm12/gluetun/internal/server"
 	"github.com/qdm12/gluetun/internal/shadowsocks"
@@ -44,14 +43,14 @@ import (
 	"github.com/qdm12/gluetun/internal/updater/resolver"
 	"github.com/qdm12/gluetun/internal/updater/unzip"
 	"github.com/qdm12/gluetun/internal/vpn"
-	"github.com/qdm12/golibs/command"
+	"github.com/qdm12/gosettings/reader"
+	"github.com/qdm12/gosettings/reader/sources/env"
 	"github.com/qdm12/goshutdown"
 	"github.com/qdm12/goshutdown/goroutine"
 	"github.com/qdm12/goshutdown/group"
 	"github.com/qdm12/goshutdown/order"
 	"github.com/qdm12/gosplash"
 	"github.com/qdm12/log"
-	"github.com/qdm12/updated/pkg/dnscrypto"
 )
 
 //nolint:gochecknoglobals
@@ -80,23 +79,32 @@ func main() {
 	netLinkDebugLogger := logger.New(log.SetComponent("netlink"))
 	netLinker := netlink.New(netLinkDebugLogger)
 	cli := cli.New()
-	cmder := command.NewCmder()
+	cmder := command.New()
 
-	secretsReader := secrets.New()
-	filesReader := files.New()
-	envReader := env.New(logger)
-	muxReader := mux.New(secretsReader, filesReader, envReader)
+	reader := reader.New(reader.Settings{
+		Sources: []reader.Source{
+			secrets.New(logger),
+			files.New(logger),
+			env.New(env.Settings{}),
+		},
+		HandleDeprecatedKey: func(source, deprecatedKey, currentKey string) {
+			logger.Warn("You are using the old " + source + " " + deprecatedKey +
+				", please consider changing it to " + currentKey)
+		},
+	})
 
 	errorCh := make(chan error)
 	go func() {
-		errorCh <- _main(ctx, buildInfo, args, logger, muxReader, tun, netLinker, cmder, cli)
+		errorCh <- _main(ctx, buildInfo, args, logger, reader, tun, netLinker, cmder, cli)
 	}()
 
+	// Wait for OS signal or run error
 	var err error
 	select {
-	case signal := <-signalCh:
+	case receivedSignal := <-signalCh:
+		signal.Stop(signalCh)
 		fmt.Println("")
-		logger.Warn("Caught OS signal " + signal.String() + ", shutting down")
+		logger.Warn("Caught OS signal " + receivedSignal.String() + ", shutting down")
 		cancel()
 	case err = <-errorCh:
 		close(errorCh)
@@ -107,15 +115,14 @@ func main() {
 		cancel()
 	}
 
+	// Shutdown timed sequence, and force exit on second OS signal
 	const shutdownGracePeriod = 5 * time.Second
 	timer := time.NewTimer(shutdownGracePeriod)
 	select {
 	case shutdownErr := <-errorCh:
-		if !timer.Stop() {
-			<-timer.C
-		}
+		timer.Stop()
 		if shutdownErr != nil {
-			logger.Warnf("Shutdown not completed gracefully: %s", shutdownErr)
+			logger.Warnf("Shutdown failed: %s", shutdownErr)
 			os.Exit(1)
 		}
 
@@ -127,39 +134,37 @@ func main() {
 	case <-timer.C:
 		logger.Warn("Shutdown timed out")
 		os.Exit(1)
-	case signal := <-signalCh:
-		logger.Warn("Caught OS signal " + signal.String() + ", forcing shut down")
-		os.Exit(1)
 	}
 }
 
-var (
-	errCommandUnknown = errors.New("command is unknown")
-)
+var errCommandUnknown = errors.New("command is unknown")
 
 //nolint:gocognit,gocyclo,maintidx
 func _main(ctx context.Context, buildInfo models.BuildInformation,
-	args []string, logger log.LoggerInterface, source Source,
-	tun Tun, netLinker netLinker, cmder command.RunStarter,
-	cli clier) error {
+	args []string, logger log.LoggerInterface, reader *reader.Reader,
+	tun Tun, netLinker netLinker, cmder RunStarter,
+	cli clier,
+) error {
 	if len(args) > 1 { // cli operation
 		switch args[1] {
 		case "healthcheck":
-			return cli.HealthCheck(ctx, source, logger)
+			return cli.HealthCheck(ctx, reader, logger)
 		case "clientkey":
 			return cli.ClientKey(args[2:])
 		case "openvpnconfig":
-			return cli.OpenvpnConfig(logger, source, netLinker)
+			return cli.OpenvpnConfig(logger, reader, netLinker)
 		case "update":
 			return cli.Update(ctx, args[2:], logger)
 		case "format-servers":
 			return cli.FormatServers(args[2:])
+		case "genkey":
+			return cli.GenKey(args[2:])
 		default:
 			return fmt.Errorf("%w: %s", errCommandUnknown, args[1])
 		}
 	}
 
-	announcementExp, err := time.Parse(time.RFC3339, "2023-07-01T00:00:00Z")
+	announcementExp, err := time.Parse(time.RFC3339, "2024-12-01T00:00:00Z")
 	if err != nil {
 		return err
 	}
@@ -169,8 +174,8 @@ func _main(ctx context.Context, buildInfo models.BuildInformation,
 		Emails:       []string{"quentin.mcgaw@gmail.com"},
 		Version:      buildInfo.Version,
 		Commit:       buildInfo.Commit,
-		BuildDate:    buildInfo.Created,
-		Announcement: "Wiki moved to https://github.com/qdm12/gluetun-wiki",
+		Created:      buildInfo.Created,
+		Announcement: "All control server routes will become private by default after the v3.41.0 release",
 		AnnounceExp:  announcementExp,
 		// Sponsor information
 		PaypalUser:    "qmcgaw",
@@ -180,17 +185,22 @@ func _main(ctx context.Context, buildInfo models.BuildInformation,
 		fmt.Println(line)
 	}
 
-	allSettings, err := source.Read()
+	var allSettings settings.Settings
+	err = allSettings.Read(reader, logger)
 	if err != nil {
 		return err
 	}
+	allSettings.SetDefaults()
 
 	// Note: no need to validate minimal settings for the firewall:
-	// - global log level is parsed from source
+	// - global log level is parsed below
 	// - firewall Debug and Enabled are booleans parsed from source
-
-	logger.Patch(log.SetLevel(*allSettings.Log.Level))
-	netLinker.PatchLoggerLevel(*allSettings.Log.Level)
+	logLevel, err := log.ParseLevel(allSettings.Log.Level)
+	if err != nil {
+		return fmt.Errorf("log level: %w", err)
+	}
+	logger.Patch(log.SetLevel(logLevel))
+	netLinker.PatchLoggerLevel(logLevel)
 
 	routingLogger := logger.New(log.SetComponent("routing"))
 	if *allSettings.Firewall.Debug { // To remove in v4
@@ -227,7 +237,7 @@ func _main(ctx context.Context, buildInfo models.BuildInformation,
 
 	// TODO run this in a loop or in openvpn to reload from file without restarting
 	storageLogger := logger.New(log.SetComponent("storage"))
-	storage, err := storage.New(storageLogger, constants.ServersData)
+	storage, err := storage.New(storageLogger, *allSettings.Storage.Filepath)
 	if err != nil {
 		return err
 	}
@@ -237,7 +247,7 @@ func _main(ctx context.Context, buildInfo models.BuildInformation,
 		return fmt.Errorf("checking for IPv6 support: %w", err)
 	}
 
-	err = allSettings.Validate(storage, ipv6Supported)
+	err = allSettings.Validate(storage, ipv6Supported, logger)
 	if err != nil {
 		return err
 	}
@@ -257,19 +267,12 @@ func _main(ctx context.Context, buildInfo models.BuildInformation,
 	ovpnConf := openvpn.New(
 		logger.New(log.SetComponent("openvpn configurator")),
 		cmder, puid, pgid)
-	dnsCrypto := dnscrypto.New(httpClient, "", "")
-	const cacertsPath = "/etc/ssl/certs/ca-certificates.crt"
-	dnsConf := unbound.NewConfigurator(nil, cmder, dnsCrypto,
-		"/etc/unbound", "/usr/sbin/unbound", cacertsPath)
 
 	err = printVersions(ctx, logger, []printVersionElement{
 		{name: "Alpine", getVersion: alpineConf.Version},
 		{name: "OpenVPN 2.5", getVersion: ovpnConf.Version25},
 		{name: "OpenVPN 2.6", getVersion: ovpnConf.Version26},
-		{name: "Unbound", getVersion: dnsConf.Version},
-		{name: "IPtables", getVersion: func(ctx context.Context) (version string, err error) {
-			return firewall.Version(ctx, cmder)
-		}},
+		{name: "IPtables", getVersion: firewallConf.Version},
 	})
 	if err != nil {
 		return err
@@ -281,10 +284,13 @@ func _main(ctx context.Context, buildInfo models.BuildInformation,
 		logger.Warn(warning)
 	}
 
-	if err := os.MkdirAll("/tmp/gluetun", 0644); err != nil {
+	const permission = fs.FileMode(0o644)
+	err = os.MkdirAll("/tmp/gluetun", permission)
+	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll("/gluetun", 0644); err != nil {
+	err = os.MkdirAll("/gluetun", permission)
+	if err != nil {
 		return err
 	}
 
@@ -296,14 +302,7 @@ func _main(ctx context.Context, buildInfo models.BuildInformation,
 	if nonRootUsername != defaultUsername {
 		logger.Info("using existing username " + nonRootUsername + " corresponding to user id " + fmt.Sprint(puid))
 	}
-	// set it for Unbound
-	// TODO remove this when migrating to qdm12/dns v2
-	allSettings.DNS.DoT.Unbound.Username = nonRootUsername
 	allSettings.VPN.OpenVPN.ProcessUser = nonRootUsername
-
-	if err := os.Chown("/etc/unbound", puid, pgid); err != nil {
-		return err
-	}
 
 	if err := routingConf.Setup(); err != nil {
 		if strings.Contains(err.Error(), "operation not permitted") {
@@ -331,11 +330,15 @@ func _main(ctx context.Context, buildInfo models.BuildInformation,
 	}
 
 	const tunDevice = "/dev/net/tun"
-	if err := tun.Check(tunDevice); err != nil {
+	err = tun.Check(tunDevice)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("checking TUN device: %w (see the Wiki errors/tun page)", err)
+		}
 		logger.Info(err.Error() + "; creating it...")
 		err = tun.Create(tunDevice)
 		if err != nil {
-			return err
+			return fmt.Errorf("creating tun device: %w", err)
 		}
 	}
 
@@ -359,7 +362,8 @@ func _main(ctx context.Context, buildInfo models.BuildInformation,
 	}
 	defaultGroupOptions := []group.Option{
 		group.OptionTimeout(defaultShutdownTimeout),
-		group.OptionOnSuccess(defaultShutdownOnSuccess)}
+		group.OptionOnSuccess(defaultShutdownOnSuccess),
+	}
 
 	controlGroupHandler := goshutdown.NewGroupHandler("control", defaultGroupOptions...)
 	tickersGroupHandler := goshutdown.NewGroupHandler("tickers", defaultGroupOptions...)
@@ -376,30 +380,35 @@ func _main(ctx context.Context, buildInfo models.BuildInformation,
 
 	portForwardLogger := logger.New(log.SetComponent("port forwarding"))
 	portForwardLooper := portforward.NewLoop(allSettings.VPN.Provider.PortForwarding,
-		routingConf, httpClient, firewallConf, portForwardLogger, puid, pgid)
+		routingConf, httpClient, firewallConf, portForwardLogger, cmder, puid, pgid)
 	portForwardRunError, err := portForwardLooper.Start(ctx)
 	if err != nil {
 		return fmt.Errorf("starting port forwarding loop: %w", err)
 	}
 
-	unboundLogger := logger.New(log.SetComponent("dns"))
-	unboundLooper := dns.NewLoop(dnsConf, allSettings.DNS, httpClient,
-		unboundLogger)
+	dnsLogger := logger.New(log.SetComponent("dns"))
+	dnsLooper, err := dns.NewLoop(allSettings.DNS, httpClient,
+		dnsLogger)
+	if err != nil {
+		return fmt.Errorf("creating DNS loop: %w", err)
+	}
+
 	dnsHandler, dnsCtx, dnsDone := goshutdown.NewGoRoutineHandler(
-		"unbound", goroutine.OptionTimeout(defaultShutdownTimeout))
-	// wait for unboundLooper.Restart or its ticker launched with RunRestartTicker
-	go unboundLooper.Run(dnsCtx, dnsDone)
+		"dns", goroutine.OptionTimeout(defaultShutdownTimeout))
+	// wait for dnsLooper.Restart or its ticker launched with RunRestartTicker
+	go dnsLooper.Run(dnsCtx, dnsDone)
 	otherGroupHandler.Add(dnsHandler)
 
 	dnsTickerHandler, dnsTickerCtx, dnsTickerDone := goshutdown.NewGoRoutineHandler(
 		"dns ticker", goroutine.OptionTimeout(defaultShutdownTimeout))
-	go unboundLooper.RunRestartTicker(dnsTickerCtx, dnsTickerDone)
+	go dnsLooper.RunRestartTicker(dnsTickerCtx, dnsTickerDone)
 	controlGroupHandler.Add(dnsTickerHandler)
 
-	ipFetcher := ipinfo.New(httpClient)
-	publicIPLooper := publicip.NewLoop(ipFetcher,
-		logger.New(log.SetComponent("ip getter")),
-		allSettings.PublicIP, puid, pgid)
+	publicIPLooper, err := publicip.NewLoop(allSettings.PublicIP, puid, pgid, httpClient,
+		logger.New(log.SetComponent("ip getter")))
+	if err != nil {
+		return fmt.Errorf("creating public ip loop: %w", err)
+	}
 	publicIPRunError, err := publicIPLooper.Start(ctx)
 	if err != nil {
 		return fmt.Errorf("starting public ip loop: %w", err)
@@ -411,12 +420,12 @@ func _main(ctx context.Context, buildInfo models.BuildInformation,
 	parallelResolver := resolver.NewParallelResolver(allSettings.Updater.DNSAddress)
 	openvpnFileExtractor := extract.New()
 	providers := provider.NewProviders(storage, time.Now, updaterLogger,
-		httpClient, unzipper, parallelResolver, ipFetcher, openvpnFileExtractor)
+		httpClient, unzipper, parallelResolver, publicIPLooper.Fetcher(), openvpnFileExtractor)
 
 	vpnLogger := logger.New(log.SetComponent("vpn"))
 	vpnLooper := vpn.NewLoop(allSettings.VPN, ipv6Supported, allSettings.Firewall.VPNInputPorts,
 		providers, storage, ovpnConf, netLinker, firewallConf, routingConf, portForwardLooper,
-		cmder, publicIPLooper, unboundLooper, vpnLogger, httpClient,
+		cmder, publicIPLooper, dnsLooper, vpnLogger, httpClient,
 		buildInfo, *allSettings.Version.Enabled)
 	vpnHandler, vpnCtx, vpnDone := goshutdown.NewGoRoutineHandler(
 		"vpn", goroutine.OptionTimeout(time.Second))
@@ -456,7 +465,8 @@ func _main(ctx context.Context, buildInfo models.BuildInformation,
 		"http server", goroutine.OptionTimeout(defaultShutdownTimeout))
 	httpServer, err := server.New(httpServerCtx, controlServerAddress, controlServerLogging,
 		logger.New(log.SetComponent("http server")),
-		buildInfo, vpnLooper, portForwardLooper, unboundLooper, updaterLooper, publicIPLooper,
+		allSettings.ControlServer.AuthFilePath,
+		buildInfo, vpnLooper, portForwardLooper, dnsLooper, updaterLooper, publicIPLooper,
 		storage, ipv6Supported)
 	if err != nil {
 		return fmt.Errorf("setting up control server: %w", err)
@@ -516,7 +526,8 @@ type infoer interface {
 }
 
 func printVersions(ctx context.Context, logger infoer,
-	elements []printVersionElement) (err error) {
+	elements []printVersionElement,
+) (err error) {
 	const timeout = 5 * time.Second
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -574,9 +585,10 @@ type Linker interface {
 type clier interface {
 	ClientKey(args []string) error
 	FormatServers(args []string) error
-	OpenvpnConfig(logger cli.OpenvpnConfigLogger, source cli.Source, ipv6Checker cli.IPv6Checker) error
-	HealthCheck(ctx context.Context, source cli.Source, warner cli.Warner) error
+	OpenvpnConfig(logger cli.OpenvpnConfigLogger, reader *reader.Reader, ipv6Checker cli.IPv6Checker) error
+	HealthCheck(ctx context.Context, reader *reader.Reader, warner cli.Warner) error
 	Update(ctx context.Context, args []string, logger cli.UpdaterLogger) error
+	GenKey(args []string) error
 }
 
 type Tun interface {
@@ -584,8 +596,8 @@ type Tun interface {
 	Create(tunDevice string) error
 }
 
-type Source interface {
-	Read() (settings settings.Settings, err error)
-	ReadHealth() (health settings.Health, err error)
-	String() string
+type RunStarter interface {
+	Run(cmd *exec.Cmd) (output string, err error)
+	Start(cmd *exec.Cmd) (stdoutLines, stderrLines <-chan string,
+		waitError <-chan error, err error)
 }

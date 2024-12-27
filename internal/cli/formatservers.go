@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,13 +17,13 @@ import (
 )
 
 var (
-	ErrFormatNotRecognized       = errors.New("format is not recognized")
 	ErrProviderUnspecified       = errors.New("VPN provider to format was not specified")
 	ErrMultipleProvidersToFormat = errors.New("more than one VPN provider to format were specified")
 )
 
 func addProviderFlag(flagSet *flag.FlagSet, providerToFormat map[string]*bool,
-	provider string, titleCaser cases.Caser) {
+	provider string, titleCaser cases.Caser,
+) {
 	boolPtr, ok := providerToFormat[provider]
 	if !ok {
 		panic(fmt.Sprintf("unknown provider in format map: %s", provider))
@@ -43,7 +44,7 @@ func (c *CLI) FormatServers(args []string) error {
 		providersToFormat[provider] = new(bool)
 	}
 	flagSet := flag.NewFlagSet("format-servers", flag.ExitOnError)
-	flagSet.StringVar(&format, "format", "markdown", "Format to use which can be: 'markdown'")
+	flagSet.StringVar(&format, "format", "markdown", "Format to use which can be: 'markdown' or 'json'")
 	flagSet.StringVar(&output, "output", "/dev/stdout", "Output file to write the formatted data to")
 	titleCaser := cases.Title(language.English)
 	for _, provider := range allProviderFlags {
@@ -53,9 +54,7 @@ func (c *CLI) FormatServers(args []string) error {
 		return err
 	}
 
-	if format != "markdown" {
-		return fmt.Errorf("%w: %s", ErrFormatNotRecognized, format)
-	}
+	// Note the format is validated by storage.Format
 
 	// Verify only one provider is set to be formatted.
 	var providers []string
@@ -73,7 +72,13 @@ func (c *CLI) FormatServers(args []string) error {
 			ErrMultipleProvidersToFormat, len(providers),
 			strings.Join(providers, ", "))
 	}
-	providerToFormat := providers[0]
+
+	var providerToFormat string
+	for _, providerToFormat = range allProviders {
+		if strings.ReplaceAll(providerToFormat, " ", "-") == providers[0] {
+			break
+		}
+	}
 
 	logger := newNoopLogger()
 	storage, err := storage.New(logger, constants.ServersData)
@@ -81,10 +86,14 @@ func (c *CLI) FormatServers(args []string) error {
 		return fmt.Errorf("creating servers storage: %w", err)
 	}
 
-	formatted := storage.FormatToMarkdown(providerToFormat)
+	formatted, err := storage.Format(providerToFormat, format)
+	if err != nil {
+		return fmt.Errorf("formatting servers: %w", err)
+	}
 
 	output = filepath.Clean(output)
-	file, err := os.OpenFile(output, os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0644)
+	const permission = fs.FileMode(0o644)
+	file, err := os.OpenFile(output, os.O_TRUNC|os.O_WRONLY|os.O_CREATE, permission)
 	if err != nil {
 		return fmt.Errorf("opening output file: %w", err)
 	}

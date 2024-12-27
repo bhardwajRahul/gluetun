@@ -6,16 +6,15 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
-
-	"github.com/qdm12/golibs/command"
 )
 
 // findIP6tablesSupported checks for multiple iptables implementations
 // and returns the iptables path that is supported. If none work, an
 // empty string path is returned.
-func findIP6tablesSupported(ctx context.Context, runner command.Runner) (
-	ip6tablesPath string, err error) {
-	ip6tablesPath, err = checkIptablesSupport(ctx, runner, "ip6tables", "ip6tables-nft")
+func findIP6tablesSupported(ctx context.Context, runner CmdRunner) (
+	ip6tablesPath string, err error,
+) {
+	ip6tablesPath, err = checkIptablesSupport(ctx, runner, "ip6tables", "ip6tables-nft", "ip6tables-legacy")
 	if errors.Is(err, ErrIPTablesNotSupported) {
 		return "", nil
 	} else if err != nil {
@@ -40,10 +39,14 @@ func (c *Config) runIP6tablesInstruction(ctx context.Context, instruction string
 	c.ip6tablesMutex.Lock() // only one ip6tables command at once
 	defer c.ip6tablesMutex.Unlock()
 
-	c.logger.Debug(c.ip6Tables + " " + instruction)
+	if isDeleteMatchInstruction(instruction) {
+		return deleteIPTablesRule(ctx, c.ip6Tables, instruction,
+			c.runner, c.logger)
+	}
 
 	flags := strings.Fields(instruction)
 	cmd := exec.CommandContext(ctx, c.ip6Tables, flags...) // #nosec G204
+	c.logger.Debug(cmd.String())
 	if output, err := c.runner.Run(cmd); err != nil {
 		return fmt.Errorf("command failed: \"%s %s\": %s: %w",
 			c.ip6Tables, instruction, output, err)
@@ -55,7 +58,7 @@ var ErrPolicyNotValid = errors.New("policy is not valid")
 
 func (c *Config) setIPv6AllPolicies(ctx context.Context, policy string) error {
 	switch policy {
-	case "ACCEPT", "DROP":
+	case "ACCEPT", "DROP": //nolint:goconst
 	default:
 		return fmt.Errorf("%w: %s", ErrPolicyNotValid, policy)
 	}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/netip"
@@ -16,48 +17,43 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qdm12/gluetun/internal/constants/providers"
+	"github.com/qdm12/gluetun/internal/format"
 	"github.com/qdm12/gluetun/internal/provider/utils"
-	"github.com/qdm12/golibs/format"
 )
 
-var (
-	ErrServerNameNotFound = errors.New("server name not found in servers")
-)
+var ErrServerNameNotFound = errors.New("server name not found in servers")
 
 // PortForward obtains a VPN server side port forwarded from PIA.
 func (p *Provider) PortForward(ctx context.Context,
-	objects utils.PortForwardObjects) (port uint16, err error) {
+	objects utils.PortForwardObjects,
+) (ports []uint16, err error) {
 	switch {
 	case objects.ServerName == "":
 		panic("server name cannot be empty")
 	case !objects.Gateway.IsValid():
 		panic("gateway is not set")
+	case objects.Username == "":
+		panic("username is not set")
+	case objects.Password == "":
+		panic("password is not set")
 	}
 
 	serverName := objects.ServerName
-
-	server, ok := p.storage.GetServerByName(providers.PrivateInternetAccess, serverName)
-	if !ok {
-		return 0, fmt.Errorf("%w: %s", ErrServerNameNotFound, serverName)
-	}
-
+	apiIP := buildAPIIPAddress(objects.Gateway)
 	logger := objects.Logger
 
-	if !server.PortForward {
-		logger.Error("The server " + serverName +
-			" (region " + server.Region + ") does not support port forwarding")
-		return 0, nil
+	if !objects.CanPortForward {
+		return nil, fmt.Errorf("%w: for server %s", ErrServerNameNotFound, serverName)
 	}
 
 	privateIPClient, err := newHTTPClient(serverName)
 	if err != nil {
-		return 0, fmt.Errorf("creating custom HTTP client: %w", err)
+		return nil, fmt.Errorf("creating custom HTTP client: %w", err)
 	}
 
 	data, err := readPIAPortForwardData(p.portForwardPath)
 	if err != nil {
-		return 0, fmt.Errorf("reading saved port forwarded data: %w", err)
+		return nil, fmt.Errorf("reading saved port forwarded data: %w", err)
 	}
 
 	dataFound := data.Port > 0
@@ -74,35 +70,36 @@ func (p *Provider) PortForward(ctx context.Context,
 
 	if !dataFound || expired {
 		client := objects.Client
-		data, err = refreshPIAPortForwardData(ctx, client, privateIPClient, objects.Gateway,
-			p.portForwardPath, p.authFilePath)
+		data, err = refreshPIAPortForwardData(ctx, client, privateIPClient, apiIP,
+			p.portForwardPath, objects.Username, objects.Password)
 		if err != nil {
-			return 0, fmt.Errorf("refreshing port forward data: %w", err)
+			return nil, fmt.Errorf("refreshing port forward data: %w", err)
 		}
 		durationToExpiration = data.Expiration.Sub(p.timeNow())
 	}
 	logger.Info("Port forwarded data expires in " + format.FriendlyDuration(durationToExpiration))
 
 	// First time binding
-	if err := bindPort(ctx, privateIPClient, objects.Gateway, data); err != nil {
-		return 0, fmt.Errorf("binding port: %w", err)
+	if err := bindPort(ctx, privateIPClient, apiIP, data); err != nil {
+		return nil, fmt.Errorf("binding port: %w", err)
 	}
 
-	return data.Port, nil
+	return []uint16{data.Port}, nil
 }
 
-var (
-	ErrPortForwardedExpired = errors.New("port forwarded data expired")
-)
+var ErrPortForwardedExpired = errors.New("port forwarded data expired")
 
 func (p *Provider) KeepPortForward(ctx context.Context,
-	objects utils.PortForwardObjects) (err error) {
+	objects utils.PortForwardObjects,
+) (err error) {
 	switch {
 	case objects.ServerName == "":
 		panic("server name cannot be empty")
 	case !objects.Gateway.IsValid():
 		panic("gateway is not set")
 	}
+
+	apiIP := buildAPIIPAddress(objects.Gateway)
 
 	privateIPClient, err := newHTTPClient(objects.ServerName)
 	if err != nil {
@@ -131,7 +128,7 @@ func (p *Provider) KeepPortForward(ctx context.Context,
 			}
 			return ctx.Err()
 		case <-keepAliveTimer.C:
-			err = bindPort(ctx, privateIPClient, objects.Gateway, data)
+			err = bindPort(ctx, privateIPClient, apiIP, data)
 			if err != nil {
 				return fmt.Errorf("binding port: %w", err)
 			}
@@ -143,14 +140,26 @@ func (p *Provider) KeepPortForward(ctx context.Context,
 	}
 }
 
+func buildAPIIPAddress(gateway netip.Addr) (api netip.Addr) {
+	if gateway.Is6() {
+		panic("IPv6 gateway not supported")
+	}
+
+	gatewayBytes := gateway.As4()
+	gatewayBytes[2] = 128
+	gatewayBytes[3] = 1
+	return netip.AddrFrom4(gatewayBytes)
+}
+
 func refreshPIAPortForwardData(ctx context.Context, client, privateIPClient *http.Client,
-	gateway netip.Addr, portForwardPath, authFilePath string) (data piaPortForwardData, err error) {
-	data.Token, err = fetchToken(ctx, client, authFilePath)
+	apiIP netip.Addr, portForwardPath, username, password string,
+) (data piaPortForwardData, err error) {
+	data.Token, err = fetchToken(ctx, client, username, password)
 	if err != nil {
 		return data, fmt.Errorf("fetching token: %w", err)
 	}
 
-	data.Port, data.Signature, data.Expiration, err = fetchPortForwardData(ctx, privateIPClient, gateway, data.Token)
+	data.Port, data.Signature, data.Expiration, err = fetchPortForwardData(ctx, privateIPClient, apiIP, data.Token)
 	if err != nil {
 		return data, fmt.Errorf("fetching port forwarding data: %w", err)
 	}
@@ -193,7 +202,8 @@ func readPIAPortForwardData(portForwardPath string) (data piaPortForwardData, er
 }
 
 func writePIAPortForwardData(portForwardPath string, data piaPortForwardData) (err error) {
-	file, err := os.OpenFile(portForwardPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	const permission = fs.FileMode(0o644)
+	file, err := os.OpenFile(portForwardPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, permission)
 	if err != nil {
 		return err
 	}
@@ -240,17 +250,11 @@ func packPayload(port uint16, token string, expiration time.Time) (payload strin
 	return payload, nil
 }
 
-var (
-	errEmptyToken = errors.New("token received is empty")
-)
+var errEmptyToken = errors.New("token received is empty")
 
 func fetchToken(ctx context.Context, client *http.Client,
-	authFilePath string) (token string, err error) {
-	username, password, err := getOpenvpnCredentials(authFilePath)
-	if err != nil {
-		return "", fmt.Errorf("getting username and password: %w", err)
-	}
-
+	username, password string,
+) (token string, err error) {
 	errSubstitutions := map[string]string{
 		url.QueryEscape(username): "<username>",
 		url.QueryEscape(password): "<password>",
@@ -295,46 +299,16 @@ func fetchToken(ctx context.Context, client *http.Client,
 	return result.Token, nil
 }
 
-var (
-	errAuthFileMalformed = errors.New("authentication file is malformed")
-)
-
-func getOpenvpnCredentials(authFilePath string) (
-	username, password string, err error) {
-	file, err := os.Open(authFilePath)
-	if err != nil {
-		return "", "", fmt.Errorf("reading OpenVPN authentication file: %w", err)
-	}
-
-	authData, err := io.ReadAll(file)
-	if err != nil {
-		_ = file.Close()
-		return "", "", fmt.Errorf("reading authentication file: %w", err)
-	}
-
-	if err := file.Close(); err != nil {
-		return "", "", err
-	}
-
-	lines := strings.Split(string(authData), "\n")
-	const minLines = 2
-	if len(lines) < minLines {
-		return "", "", fmt.Errorf("%w: only %d lines exist", errAuthFileMalformed, len(lines))
-	}
-
-	username, password = lines[0], lines[1]
-	return username, password, nil
-}
-
-func fetchPortForwardData(ctx context.Context, client *http.Client, gateway netip.Addr, token string) (
-	port uint16, signature string, expiration time.Time, err error) {
+func fetchPortForwardData(ctx context.Context, client *http.Client, apiIP netip.Addr, token string) (
+	port uint16, signature string, expiration time.Time, err error,
+) {
 	errSubstitutions := map[string]string{url.QueryEscape(token): "<token>"}
 
 	queryParams := make(url.Values)
 	queryParams.Add("token", token)
 	url := url.URL{
 		Scheme:   "https",
-		Host:     net.JoinHostPort(gateway.String(), "19999"),
+		Host:     net.JoinHostPort(apiIP.String(), "19999"),
 		Path:     "/getSignature",
 		RawQuery: queryParams.Encode(),
 	}
@@ -376,11 +350,9 @@ func fetchPortForwardData(ctx context.Context, client *http.Client, gateway neti
 	return port, data.Signature, expiration, err
 }
 
-var (
-	ErrBadResponse = errors.New("bad response received")
-)
+var ErrBadResponse = errors.New("bad response received")
 
-func bindPort(ctx context.Context, client *http.Client, gateway netip.Addr, data piaPortForwardData) (err error) {
+func bindPort(ctx context.Context, client *http.Client, apiIPAddress netip.Addr, data piaPortForwardData) (err error) {
 	payload, err := packPayload(data.Port, data.Token, data.Expiration)
 	if err != nil {
 		return fmt.Errorf("serializing payload: %w", err)
@@ -391,7 +363,7 @@ func bindPort(ctx context.Context, client *http.Client, gateway netip.Addr, data
 	queryParams.Add("signature", data.Signature)
 	bindPortURL := url.URL{
 		Scheme:   "https",
-		Host:     net.JoinHostPort(gateway.String(), "19999"),
+		Host:     net.JoinHostPort(apiIPAddress.String(), "19999"),
 		Path:     "/bindPort",
 		RawQuery: queryParams.Encode(),
 	}

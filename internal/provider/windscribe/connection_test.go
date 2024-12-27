@@ -23,7 +23,6 @@ func Test_Provider_GetConnection(t *testing.T) {
 	const provider = providers.Windscribe
 
 	errTest := errors.New("test error")
-	boolPtr := func(b bool) *bool { return &b }
 
 	testCases := map[string]struct {
 		filteredServers []models.Server
@@ -46,7 +45,7 @@ func Test_Provider_GetConnection(t *testing.T) {
 			},
 			selection: settings.ServerSelection{
 				OpenVPN: settings.OpenVPNSelection{
-					TCP: boolPtr(true),
+					Protocol: constants.TCP,
 				},
 			}.WithDefaults(provider),
 			connection: models.Connection{
@@ -62,7 +61,7 @@ func Test_Provider_GetConnection(t *testing.T) {
 			},
 			selection: settings.ServerSelection{
 				OpenVPN: settings.OpenVPNSelection{
-					TCP: boolPtr(false),
+					Protocol: constants.UDP,
 				},
 			}.WithDefaults(provider),
 			connection: models.Connection{
@@ -90,7 +89,6 @@ func Test_Provider_GetConnection(t *testing.T) {
 	}
 
 	for name, testCase := range testCases {
-		testCase := testCase
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			ctrl := gomock.NewController(t)
