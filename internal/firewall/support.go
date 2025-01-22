@@ -8,8 +8,6 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
-
-	"github.com/qdm12/golibs/command"
 )
 
 var (
@@ -19,8 +17,9 @@ var (
 	ErrIPTablesNotSupported = errors.New("no iptables supported found")
 )
 
-func checkIptablesSupport(ctx context.Context, runner command.Runner,
-	iptablesPathsToTry ...string) (iptablesPath string, err error) {
+func checkIptablesSupport(ctx context.Context, runner CmdRunner,
+	iptablesPathsToTry ...string,
+) (iptablesPath string, err error) {
 	iptablesPathToUnsupportedMessage := make(map[string]string, len(iptablesPathsToTry))
 	for _, pathToTest := range iptablesPathsToTry {
 		ok, unsupportedMessage, err := testIptablesPath(ctx, pathToTest, runner)
@@ -62,8 +61,9 @@ func checkIptablesSupport(ctx context.Context, runner command.Runner,
 }
 
 func testIptablesPath(ctx context.Context, path string,
-	runner command.Runner) (ok bool, unsupportedMessage string,
-	criticalErr error) {
+	runner CmdRunner) (ok bool, unsupportedMessage string,
+	criticalErr error,
+) {
 	// Just listing iptables rules often work but we need
 	// to modify them to ensure we can support the iptables
 	// being tested.
@@ -92,7 +92,7 @@ func testIptablesPath(ctx context.Context, path string,
 	// Set policy as the existing policy so no mutation is done.
 	// This is an extra check for some buggy kernels where setting the policy
 	// does not work.
-	cmd = exec.CommandContext(ctx, path, "-L", "INPUT")
+	cmd = exec.CommandContext(ctx, path, "-nL", "INPUT")
 	output, err = runner.Run(cmd)
 	if err != nil {
 		unsupportedMessage = fmt.Sprintf("%s (%s)", output, err)

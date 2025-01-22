@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/qdm12/gluetun/internal/constants/providers"
+	"github.com/qdm12/gluetun/internal/format"
 	"github.com/qdm12/gluetun/internal/models"
-	"github.com/qdm12/golibs/format"
 )
 
 func (s *Storage) mergeServers(hardcoded, persisted models.AllServers) models.AllServers {
@@ -27,7 +27,8 @@ func (s *Storage) mergeServers(hardcoded, persisted models.AllServers) models.Al
 }
 
 func (s *Storage) mergeProviderServers(provider string,
-	hardcoded, persisted models.Servers) (merged models.Servers) {
+	hardcoded, persisted models.Servers,
+) (merged models.Servers) {
 	if persisted.Timestamp > hardcoded.Timestamp {
 		diff := time.Unix(persisted.Timestamp, 0).Sub(time.Unix(hardcoded.Timestamp, 0))
 		if diff < 0 {

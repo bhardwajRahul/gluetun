@@ -9,7 +9,8 @@ import (
 )
 
 func BuildWireguardSettings(connection models.Connection,
-	userSettings settings.Wireguard, ipv6Supported bool) (settings wireguard.Settings) {
+	userSettings settings.Wireguard, ipv6Supported bool,
+) (settings wireguard.Settings) {
 	settings.PrivateKey = *userSettings.PrivateKey
 	settings.PublicKey = connection.PubKey
 	settings.PreSharedKey = *userSettings.PreSharedKey
@@ -39,6 +40,8 @@ func BuildWireguardSettings(connection models.Connection,
 		}
 		settings.AllowedIPs = append(settings.AllowedIPs, allowedIP)
 	}
+
+	settings.PersistentKeepaliveInterval = *userSettings.PersistentKeepaliveInterval
 
 	return settings
 }

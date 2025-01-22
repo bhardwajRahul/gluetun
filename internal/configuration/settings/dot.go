@@ -3,9 +3,12 @@ package settings
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"time"
 
+	"github.com/qdm12/dns/v2/pkg/provider"
 	"github.com/qdm12/gosettings"
+	"github.com/qdm12/gosettings/reader"
 	"github.com/qdm12/gotree"
 )
 
@@ -15,22 +18,24 @@ type DoT struct {
 	// and used. It defaults to true, and cannot be nil
 	// in the internal state.
 	Enabled *bool
-	// UpdatePeriod is the period to update DNS block
-	// lists and cryptographic files for DNSSEC validation.
+	// UpdatePeriod is the period to update DNS block lists.
 	// It can be set to 0 to disable the update.
 	// It defaults to 24h and cannot be nil in
 	// the internal state.
 	UpdatePeriod *time.Duration
-	// Unbound contains settings to configure Unbound.
-	Unbound Unbound
+	// Providers is a list of DNS over TLS providers
+	Providers []string `json:"providers"`
+	// Caching is true if the DoT server should cache
+	// DNS responses.
+	Caching *bool `json:"caching"`
+	// IPv6 is true if the DoT server should connect over IPv6.
+	IPv6 *bool `json:"ipv6"`
 	// Blacklist contains settings to configure the filter
 	// block lists.
 	Blacklist DNSBlacklist
 }
 
-var (
-	ErrDoTUpdatePeriodTooShort = errors.New("update period is too short")
-)
+var ErrDoTUpdatePeriodTooShort = errors.New("update period is too short")
 
 func (d DoT) validate() (err error) {
 	const minUpdatePeriod = 30 * time.Second
@@ -39,9 +44,12 @@ func (d DoT) validate() (err error) {
 			ErrDoTUpdatePeriodTooShort, *d.UpdatePeriod, minUpdatePeriod)
 	}
 
-	err = d.Unbound.validate()
-	if err != nil {
-		return err
+	providers := provider.NewProviders()
+	for _, providerName := range d.Providers {
+		_, err := providers.Get(providerName)
+		if err != nil {
+			return err
+		}
 	}
 
 	err = d.Blacklist.validate()
@@ -56,18 +64,11 @@ func (d *DoT) copy() (copied DoT) {
 	return DoT{
 		Enabled:      gosettings.CopyPointer(d.Enabled),
 		UpdatePeriod: gosettings.CopyPointer(d.UpdatePeriod),
-		Unbound:      d.Unbound.copy(),
+		Providers:    gosettings.CopySlice(d.Providers),
+		Caching:      gosettings.CopyPointer(d.Caching),
+		IPv6:         gosettings.CopyPointer(d.IPv6),
 		Blacklist:    d.Blacklist.copy(),
 	}
-}
-
-// mergeWith merges the other settings into any
-// unset field of the receiver settings object.
-func (d *DoT) mergeWith(other DoT) {
-	d.Enabled = gosettings.MergeWithPointer(d.Enabled, other.Enabled)
-	d.UpdatePeriod = gosettings.MergeWithPointer(d.UpdatePeriod, other.UpdatePeriod)
-	d.Unbound.mergeWith(other.Unbound)
-	d.Blacklist.mergeWith(other.Blacklist)
 }
 
 // overrideWith overrides fields of the receiver
@@ -76,7 +77,9 @@ func (d *DoT) mergeWith(other DoT) {
 func (d *DoT) overrideWith(other DoT) {
 	d.Enabled = gosettings.OverrideWithPointer(d.Enabled, other.Enabled)
 	d.UpdatePeriod = gosettings.OverrideWithPointer(d.UpdatePeriod, other.UpdatePeriod)
-	d.Unbound.overrideWith(other.Unbound)
+	d.Providers = gosettings.OverrideWithSlice(d.Providers, other.Providers)
+	d.Caching = gosettings.OverrideWithPointer(d.Caching, other.Caching)
+	d.IPv6 = gosettings.OverrideWithPointer(d.IPv6, other.IPv6)
 	d.Blacklist.overrideWith(other.Blacklist)
 }
 
@@ -84,8 +87,24 @@ func (d *DoT) setDefaults() {
 	d.Enabled = gosettings.DefaultPointer(d.Enabled, true)
 	const defaultUpdatePeriod = 24 * time.Hour
 	d.UpdatePeriod = gosettings.DefaultPointer(d.UpdatePeriod, defaultUpdatePeriod)
-	d.Unbound.setDefaults()
+	d.Providers = gosettings.DefaultSlice(d.Providers, []string{
+		provider.Cloudflare().Name,
+	})
+	d.Caching = gosettings.DefaultPointer(d.Caching, true)
+	d.IPv6 = gosettings.DefaultPointer(d.IPv6, false)
 	d.Blacklist.setDefaults()
+}
+
+func (d DoT) GetFirstPlaintextIPv4() (ipv4 netip.Addr) {
+	providers := provider.NewProviders()
+	provider, err := providers.Get(d.Providers[0])
+	if err != nil {
+		// Settings should be validated before calling this function,
+		// so an error happening here is a programming error.
+		panic(err)
+	}
+
+	return provider.DoT.IPv4[0].Addr()
 }
 
 func (d DoT) String() string {
@@ -100,14 +119,52 @@ func (d DoT) toLinesNode() (node *gotree.Node) {
 		return node
 	}
 
-	update := "disabled"
+	update := "disabled" //nolint:goconst
 	if *d.UpdatePeriod > 0 {
 		update = "every " + d.UpdatePeriod.String()
 	}
 	node.Appendf("Update period: %s", update)
 
-	node.AppendNode(d.Unbound.toLinesNode())
+	upstreamResolvers := node.Append("Upstream resolvers:")
+	for _, provider := range d.Providers {
+		upstreamResolvers.Append(provider)
+	}
+
+	node.Appendf("Caching: %s", gosettings.BoolToYesNo(d.Caching))
+	node.Appendf("IPv6: %s", gosettings.BoolToYesNo(d.IPv6))
+
 	node.AppendNode(d.Blacklist.toLinesNode())
 
 	return node
+}
+
+func (d *DoT) read(reader *reader.Reader) (err error) {
+	d.Enabled, err = reader.BoolPtr("DOT")
+	if err != nil {
+		return err
+	}
+
+	d.UpdatePeriod, err = reader.DurationPtr("DNS_UPDATE_PERIOD")
+	if err != nil {
+		return err
+	}
+
+	d.Providers = reader.CSV("DOT_PROVIDERS")
+
+	d.Caching, err = reader.BoolPtr("DOT_CACHING")
+	if err != nil {
+		return err
+	}
+
+	d.IPv6, err = reader.BoolPtr("DOT_IPV6")
+	if err != nil {
+		return err
+	}
+
+	err = d.Blacklist.read(reader)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

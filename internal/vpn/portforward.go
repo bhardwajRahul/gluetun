@@ -11,7 +11,8 @@ import (
 )
 
 func getPortForwarder(provider Provider, providers Providers, //nolint:ireturn
-	customPortForwarderName string) (portForwarder PortForwarder) {
+	customPortForwarderName string,
+) (portForwarder PortForwarder) {
 	if customPortForwarderName != "" {
 		provider = providers.Get(customPortForwarderName)
 	}
@@ -26,9 +27,12 @@ func (l *Loop) startPortForwarding(data tunnelUpData) (err error) {
 	partialUpdate := portforward.Settings{
 		VPNIsUp: ptrTo(true),
 		Service: service.Settings{
-			PortForwarder: data.portForwarder,
-			Interface:     data.vpnIntf,
-			ServerName:    data.serverName,
+			PortForwarder:  data.portForwarder,
+			Interface:      data.vpnIntf,
+			ServerName:     data.serverName,
+			CanPortForward: data.canPortForward,
+			Username:       data.username,
+			Password:       data.password,
 		},
 	}
 	return l.portForward.UpdateWith(partialUpdate)
@@ -58,8 +62,9 @@ func (n *noPortForwarder) Name() string {
 }
 
 func (n *noPortForwarder) PortForward(context.Context, pfutils.PortForwardObjects) (
-	port uint16, err error) {
-	return 0, fmt.Errorf("%w: for %s", ErrPortForwardingNotSupported, n.providerName)
+	ports []uint16, err error,
+) {
+	return nil, fmt.Errorf("%w: for %s", ErrPortForwardingNotSupported, n.providerName)
 }
 
 func (n *noPortForwarder) KeepPortForward(context.Context, pfutils.PortForwardObjects) (err error) {

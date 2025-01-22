@@ -16,7 +16,7 @@ type OpenVPNProviderSettings struct {
 	RemoteCertTLS bool
 	Ciphers       []string
 	Auth          string
-	CA            string
+	CAs           []string
 	CRLVerify     string
 	Cert          string
 	Key           string
@@ -52,7 +52,8 @@ type OpenVPNProviderSettings struct {
 //nolint:gocognit,gocyclo
 func OpenVPNConfig(provider OpenVPNProviderSettings,
 	connection models.Connection,
-	settings settings.OpenVPN, ipv6Supported bool) []string {
+	settings settings.OpenVPN, ipv6Supported bool,
+) []string {
 	var lines openvpnConfigLines
 	lines.add("client")
 	lines.add("nobind")
@@ -174,8 +175,8 @@ func OpenVPNConfig(provider OpenVPNProviderSettings,
 		lines.add("setenv", envKey, envValue)
 	}
 
-	if provider.CA != "" {
-		lines.addLines(WrapOpenvpnCA(provider.CA))
+	for _, ca := range provider.CAs {
+		lines.addLines(WrapOpenvpnCA(ca))
 	}
 	if provider.CRLVerify != "" {
 		lines.addLines(WrapOpenvpnCRLVerify(provider.CRLVerify))
@@ -254,7 +255,8 @@ func defaultUint16(value, defaultValue uint16) uint16 {
 }
 
 func defaultStringSlice(value, defaultValue []string) (
-	result []string) {
+	result []string,
+) {
 	if len(value) > 0 {
 		result = make([]string, len(value))
 		copy(result, value)

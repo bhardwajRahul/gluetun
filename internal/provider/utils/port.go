@@ -4,11 +4,13 @@ import (
 	"fmt"
 
 	"github.com/qdm12/gluetun/internal/configuration/settings"
+	"github.com/qdm12/gluetun/internal/constants"
 	"github.com/qdm12/gluetun/internal/constants/vpn"
 )
 
 func getPort(selection settings.ServerSelection,
-	defaultOpenVPNTCP, defaultOpenVPNUDP, defaultWireguard uint16) (port uint16) {
+	defaultOpenVPNTCP, defaultOpenVPNUDP, defaultWireguard uint16,
+) (port uint16) {
 	switch selection.VPN {
 	case vpn.Wireguard:
 		customPort := *selection.Wireguard.EndpointPort
@@ -22,7 +24,7 @@ func getPort(selection settings.ServerSelection,
 		if customPort > 0 {
 			return customPort
 		}
-		if *selection.OpenVPN.TCP {
+		if selection.OpenVPN.Protocol == constants.TCP {
 			checkDefined("OpenVPN TCP", defaultOpenVPNTCP)
 			return defaultOpenVPNTCP
 		}

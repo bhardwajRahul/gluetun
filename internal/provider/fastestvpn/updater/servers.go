@@ -4,53 +4,36 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 
+	"github.com/qdm12/gluetun/internal/constants/vpn"
 	"github.com/qdm12/gluetun/internal/models"
 	"github.com/qdm12/gluetun/internal/provider/common"
-	"github.com/qdm12/gluetun/internal/updater/openvpn"
 )
 
 func (u *Updater) FetchServers(ctx context.Context, minServers int) (
-	servers []models.Server, err error) {
-	const url = "https://support.fastestvpn.com/download/fastestvpn_ovpn"
-	contents, err := u.unzipper.FetchAndExtract(ctx, url)
-	if err != nil {
-		return nil, err
-	} else if len(contents) < minServers {
-		return nil, fmt.Errorf("%w: %d and expected at least %d",
-			common.ErrNotEnoughServers, len(contents), minServers)
-	}
+	servers []models.Server, err error,
+) {
+	protocols := []string{"ikev2", "tcp", "udp"}
+	hts := make(hostToServerData)
 
-	hts := make(hostToServer)
-
-	for fileName, content := range contents {
-		if !strings.HasSuffix(fileName, ".ovpn") {
-			continue // not an OpenVPN file
-		}
-
-		country, tcp, udp, err := parseFilename(fileName)
+	for _, protocol := range protocols {
+		apiServers, err := fetchAPIServers(ctx, u.client, protocol)
 		if err != nil {
-			u.warner.Warn(err.Error())
-			continue
+			return nil, fmt.Errorf("fetching %s servers from API: %w", protocol, err)
 		}
+		for _, apiServer := range apiServers {
+			// all hostnames from the protocols TCP, UDP and IKEV2 support Wireguard
+			// per https://github.com/qdm12/gluetun-wiki/issues/76#issuecomment-2125420536
+			const wgTCP, wgUDP = false, false // ignored
+			hts.add(apiServer.hostname, vpn.Wireguard, apiServer.country, apiServer.city, wgTCP, wgUDP)
 
-		host, warning, err := openvpn.ExtractHost(content)
-		if warning != "" {
-			u.warner.Warn(warning)
+			tcp := protocol == "tcp"
+			udp := protocol == "udp"
+			if !tcp && !udp { // not an OpenVPN protocol, for example ikev2
+				continue
+			}
+			hts.add(apiServer.hostname, vpn.OpenVPN, apiServer.country, apiServer.city, tcp, udp)
 		}
-		if err != nil {
-			// treat error as warning and go to next file
-			u.warner.Warn(err.Error() + " in " + fileName)
-			continue
-		}
-
-		hts.add(host, country, tcp, udp)
-	}
-
-	if len(hts) < minServers {
-		return nil, fmt.Errorf("%w: %d and expected at least %d",
-			common.ErrNotEnoughServers, len(hts), minServers)
 	}
 
 	hosts := hts.toHostsSlice()
@@ -63,14 +46,14 @@ func (u *Updater) FetchServers(ctx context.Context, minServers int) (
 		return nil, err
 	}
 
-	if len(hostToIPs) < minServers {
-		return nil, fmt.Errorf("%w: %d and expected at least %d",
-			common.ErrNotEnoughServers, len(servers), minServers)
-	}
-
 	hts.adaptWithIPs(hostToIPs)
 
 	servers = hts.toServersSlice()
+
+	if len(servers) < minServers {
+		return nil, fmt.Errorf("%w: %d and expected at least %d",
+			common.ErrNotEnoughServers, len(servers), minServers)
+	}
 
 	sort.Sort(models.SortableServers(servers))
 

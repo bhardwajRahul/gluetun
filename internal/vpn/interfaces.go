@@ -3,6 +3,7 @@ package vpn
 import (
 	"context"
 	"net/netip"
+	"os/exec"
 
 	"github.com/qdm12/gluetun/internal/configuration/settings"
 	"github.com/qdm12/gluetun/internal/models"
@@ -47,13 +48,12 @@ type Provider interface {
 type PortForwarder interface {
 	Name() string
 	PortForward(ctx context.Context, objects utils.PortForwardObjects) (
-		port uint16, err error)
+		ports []uint16, err error)
 	KeepPortForward(ctx context.Context, objects utils.PortForwardObjects) (err error)
 }
 
 type Storage interface {
 	FilterServers(provider string, selection settings.ServerSelection) (servers []models.Server, err error)
-	GetServerByName(provider, name string) (server models.Server, ok bool)
 }
 
 type NetLinker interface {
@@ -90,6 +90,12 @@ type DNSLoop interface {
 }
 
 type PublicIPLoop interface {
-	StartSingleRun()
+	RunOnce(ctx context.Context) (err error)
 	ClearData() (err error)
+}
+
+type CmdStarter interface {
+	Start(cmd *exec.Cmd) (
+		stdoutLines, stderrLines <-chan string,
+		waitError <-chan error, startErr error)
 }

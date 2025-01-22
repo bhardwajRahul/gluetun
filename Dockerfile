@@ -1,8 +1,8 @@
-ARG ALPINE_VERSION=3.18
-ARG GO_ALPINE_VERSION=3.18
-ARG GO_VERSION=1.21
+ARG ALPINE_VERSION=3.20
+ARG GO_ALPINE_VERSION=3.20
+ARG GO_VERSION=1.23
 ARG XCPUTRANSLATE_VERSION=v0.6.0
-ARG GOLANGCI_LINT_VERSION=v1.54.1
+ARG GOLANGCI_LINT_VERSION=v1.61.0
 ARG MOCKGEN_VERSION=v1.6.0
 ARG BUILDPLATFORM=linux/amd64
 
@@ -76,43 +76,57 @@ LABEL \
 ENV VPN_SERVICE_PROVIDER=pia \
     VPN_TYPE=openvpn \
     # Common VPN options
-    VPN_ENDPOINT_IP= \
-    VPN_ENDPOINT_PORT= \
     VPN_INTERFACE=tun0 \
     # OpenVPN
+    OPENVPN_ENDPOINT_IP= \
+    OPENVPN_ENDPOINT_PORT= \
     OPENVPN_PROTOCOL=udp \
     OPENVPN_USER= \
     OPENVPN_PASSWORD= \
     OPENVPN_USER_SECRETFILE=/run/secrets/openvpn_user \
     OPENVPN_PASSWORD_SECRETFILE=/run/secrets/openvpn_password \
-    OPENVPN_VERSION=2.5 \
+    OPENVPN_VERSION=2.6 \
     OPENVPN_VERBOSITY=1 \
     OPENVPN_FLAGS= \
     OPENVPN_CIPHERS= \
     OPENVPN_AUTH= \
     OPENVPN_PROCESS_USER=root \
+    OPENVPN_MSSFIX= \
     OPENVPN_CUSTOM_CONFIG= \
     # Wireguard
+    WIREGUARD_ENDPOINT_IP= \
+    WIREGUARD_ENDPOINT_PORT= \
+    WIREGUARD_CONF_SECRETFILE=/run/secrets/wg0.conf \
     WIREGUARD_PRIVATE_KEY= \
+    WIREGUARD_PRIVATE_KEY_SECRETFILE=/run/secrets/wireguard_private_key \
     WIREGUARD_PRESHARED_KEY= \
+    WIREGUARD_PRESHARED_KEY_SECRETFILE=/run/secrets/wireguard_preshared_key \
     WIREGUARD_PUBLIC_KEY= \
     WIREGUARD_ALLOWED_IPS= \
+    WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL=0 \
     WIREGUARD_ADDRESSES= \
-    WIREGUARD_MTU=1400 \
+    WIREGUARD_ADDRESSES_SECRETFILE=/run/secrets/wireguard_addresses \
+    WIREGUARD_MTU=1320 \
     WIREGUARD_IMPLEMENTATION=auto \
     # VPN server filtering
     SERVER_REGIONS= \
     SERVER_COUNTRIES= \
     SERVER_CITIES= \
     SERVER_HOSTNAMES= \
+    SERVER_CATEGORIES= \
     # # Mullvad only:
     ISP= \
     OWNED_ONLY=no \
     # # Private Internet Access only:
     PRIVATE_INTERNET_ACCESS_OPENVPN_ENCRYPTION_PRESET= \
     VPN_PORT_FORWARDING=off \
+    VPN_PORT_FORWARDING_LISTENING_PORT=0 \
     VPN_PORT_FORWARDING_PROVIDER= \
     VPN_PORT_FORWARDING_STATUS_FILE="/tmp/gluetun/forwarded_port" \
+    VPN_PORT_FORWARDING_USERNAME= \
+    VPN_PORT_FORWARDING_PASSWORD= \
+    VPN_PORT_FORWARDING_UP_COMMAND= \
+    VPN_PORT_FORWARDING_DOWN_COMMAND= \
     # # Cyberghost only:
     OPENVPN_CERT= \
     OPENVPN_KEY= \
@@ -127,14 +141,20 @@ ENV VPN_SERVICE_PROVIDER=pia \
     SERVER_NUMBER= \
     # # PIA only:
     SERVER_NAMES= \
-    # # ProtonVPN only:
+    # # VPNUnlimited and ProtonVPN only:
+    STREAM_ONLY= \
     FREE_ONLY= \
+    # # ProtonVPN only:
+    SECURE_CORE_ONLY= \
+    TOR_ONLY= \
     # # Surfshark only:
     MULTIHOP_ONLY= \
     # # VPN Secure only:
     PREMIUM_ONLY= \
+    # # PIA and ProtonVPN only:
+    PORT_FORWARD_ONLY= \
     # Firewall
-    FIREWALL=on \
+    FIREWALL_ENABLED_DISABLING_IT_SHOOTS_YOU_IN_YOUR_FOOT=on \
     FIREWALL_VPN_INPUT_PORTS= \
     FIREWALL_INPUT_PORTS= \
     FIREWALL_OUTBOUND_SUBNETS= \
@@ -151,9 +171,6 @@ ENV VPN_SERVICE_PROVIDER=pia \
     DOT=on \
     DOT_PROVIDERS=cloudflare \
     DOT_PRIVATE_ADDRESS=127.0.0.1/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,::1/128,fc00::/7,fe80::/10,::ffff:7f00:1/104,::ffff:a00:0/104,::ffff:a9fe:0/112,::ffff:ac10:0/108,::ffff:c0a8:0/112 \
-    DOT_VERBOSITY=1 \
-    DOT_VERBOSITY_DETAILS=0 \
-    DOT_VALIDATION_LOGLEVEL=0 \
     DOT_CACHING=on \
     DOT_IPV6=off \
     BLOCK_MALICIOUS=on \
@@ -182,13 +199,18 @@ ENV VPN_SERVICE_PROVIDER=pia \
     # Control server
     HTTP_CONTROL_SERVER_LOG=on \
     HTTP_CONTROL_SERVER_ADDRESS=":8000" \
+    HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH=/gluetun/auth/config.toml \
     # Server data updater
     UPDATER_PERIOD=0 \
     UPDATER_MIN_RATIO=0.8 \
     UPDATER_VPN_SERVICE_PROVIDERS= \
     # Public IP
     PUBLICIP_FILE="/tmp/gluetun/ip" \
-    PUBLICIP_PERIOD=12h \
+    PUBLICIP_ENABLED=on \
+    PUBLICIP_API=ipinfo,ifconfigco,ip2location,cloudflare \
+    PUBLICIP_API_TOKEN= \
+    # Storage
+    STORAGE_FILEPATH=/gluetun/servers.json \
     # Pprof
     PPROF_ENABLED=no \
     PPROF_BLOCK_PROFILE_RATE=0 \
@@ -201,18 +223,15 @@ ENV VPN_SERVICE_PROVIDER=pia \
     PGID=
 ENTRYPOINT ["/gluetun-entrypoint"]
 EXPOSE 8000/tcp 8888/tcp 8388/tcp 8388/udp
-HEALTHCHECK --interval=5s --timeout=5s --start-period=10s --retries=1 CMD /gluetun-entrypoint healthcheck
+HEALTHCHECK --interval=5s --timeout=5s --start-period=10s --retries=3 CMD /gluetun-entrypoint healthcheck
 ARG TARGETPLATFORM
 RUN apk add --no-cache --update -l wget && \
     apk add --no-cache --update -X "https://dl-cdn.alpinelinux.org/alpine/v3.17/main" openvpn\~2.5 && \
     mv /usr/sbin/openvpn /usr/sbin/openvpn2.5 && \
     apk del openvpn && \
-    apk add --no-cache --update openvpn ca-certificates iptables ip6tables unbound tzdata && \
+    apk add --no-cache --update openvpn ca-certificates iptables iptables-legacy tzdata && \
     mv /usr/sbin/openvpn /usr/sbin/openvpn2.6 && \
-    # Fix vulnerability issue
-    apk add --no-cache --update busybox && \
-    rm -rf /var/cache/apk/* /etc/unbound/* /usr/sbin/unbound-* /etc/openvpn/*.sh /usr/lib/openvpn/plugins/openvpn-plugin-down-root.so && \
+    rm -rf /var/cache/apk/* /etc/openvpn/*.sh /usr/lib/openvpn/plugins/openvpn-plugin-down-root.so && \
     deluser openvpn && \
-    deluser unbound && \
     mkdir /gluetun
 COPY --from=build /tmp/gobuild/entrypoint /gluetun-entrypoint

@@ -41,19 +41,19 @@ func Test_Updater_GetServers(t *testing.T) {
 		err     error
 	}{
 		"unzipper error": {
-			warnerBuilder: func(ctrl *gomock.Controller) common.Warner { return nil },
+			warnerBuilder: func(_ *gomock.Controller) common.Warner { return nil },
 			unzipErr:      errors.New("dummy"),
 			err:           errors.New("dummy"),
 		},
 		"not enough unzip contents": {
 			minServers:    1,
-			warnerBuilder: func(ctrl *gomock.Controller) common.Warner { return nil },
+			warnerBuilder: func(_ *gomock.Controller) common.Warner { return nil },
 			unzipContents: map[string][]byte{},
 			err:           errors.New("not enough servers found: 0 and expected at least 1"),
 		},
 		"no openvpn file": {
 			minServers:    1,
-			warnerBuilder: func(ctrl *gomock.Controller) common.Warner { return nil },
+			warnerBuilder: func(_ *gomock.Controller) common.Warner { return nil },
 			unzipContents: map[string][]byte{"somefile.txt": {}},
 			err:           errors.New("not enough servers found: 0 and expected at least 1"),
 		},
@@ -187,7 +187,6 @@ func Test_Updater_GetServers(t *testing.T) {
 		},
 	}
 	for name, testCase := range testCases {
-		testCase := testCase
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			ctrl := gomock.NewController(t)
@@ -195,7 +194,7 @@ func Test_Updater_GetServers(t *testing.T) {
 			ctx := context.Background()
 
 			unzipper := common.NewMockUnzipper(ctrl)
-			const zipURL = "https://configs.ipvanish.com/configs/configs.zip"
+			const zipURL = "https://configs.ipvanish.com/openvpn/v2.6.0-0/configs.zip"
 			unzipper.EXPECT().FetchAndExtract(ctx, zipURL).
 				Return(testCase.unzipContents, testCase.unzipErr)
 

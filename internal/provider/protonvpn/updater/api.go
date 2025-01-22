@@ -9,9 +9,7 @@ import (
 	"net/netip"
 )
 
-var (
-	ErrHTTPStatusCodeNotOK = errors.New("HTTP status code not OK")
-)
+var ErrHTTPStatusCodeNotOK = errors.New("HTTP status code not OK")
 
 type apiData struct {
 	LogicalServers []logicalServer `json:"LogicalServers"`
@@ -23,17 +21,21 @@ type logicalServer struct {
 	Region      *string          `json:"Region"`
 	City        *string          `json:"City"`
 	Servers     []physicalServer `json:"Servers"`
+	Features    uint16           `json:"Features"`
+	Tier        *uint8           `json:"Tier,omitempty"`
 }
 
 type physicalServer struct {
-	EntryIP netip.Addr `json:"EntryIP"`
-	ExitIP  netip.Addr `json:"ExitIP"`
-	Domain  string     `json:"Domain"`
-	Status  uint8      `json:"Status"`
+	EntryIP         netip.Addr `json:"EntryIP"`
+	ExitIP          netip.Addr `json:"ExitIP"`
+	Domain          string     `json:"Domain"`
+	Status          uint8      `json:"Status"`
+	X25519PublicKey string     `json:"X25519PublicKey"`
 }
 
 func fetchAPI(ctx context.Context, client *http.Client) (
-	data apiData, err error) {
+	data apiData, err error,
+) {
 	const url = "https://api.protonmail.ch/vpn/logicals"
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

@@ -51,6 +51,13 @@ func (c *Config) disable(ctx context.Context) (err error) {
 	if err = c.setIPv6AllPolicies(ctx, "ACCEPT"); err != nil {
 		return fmt.Errorf("setting ipv6 policies: %w", err)
 	}
+
+	const remove = true
+	err = c.redirectPorts(ctx, remove)
+	if err != nil {
+		return fmt.Errorf("removing port redirections: %w", err)
+	}
+
 	return nil
 }
 
@@ -99,12 +106,20 @@ func (c *Config) enable(ctx context.Context) (err error) {
 		return err
 	}
 
+	localInterfaces := make(map[string]struct{}, len(c.localNetworks))
 	for _, network := range c.localNetworks {
 		if err := c.acceptOutputFromIPToSubnet(ctx, network.InterfaceName, network.IP, network.IPNet, remove); err != nil {
 			return err
 		}
-		if err = c.acceptIpv6MulticastOutput(ctx, network.InterfaceName, remove); err != nil {
-			return err
+
+		_, localInterfaceSeen := localInterfaces[network.InterfaceName]
+		if localInterfaceSeen {
+			continue
+		}
+		localInterfaces[network.InterfaceName] = struct{}{}
+		err = c.acceptIpv6MulticastOutput(ctx, network.InterfaceName, remove)
+		if err != nil {
+			return fmt.Errorf("accepting IPv6 multicast output: %w", err)
 		}
 	}
 
@@ -124,6 +139,11 @@ func (c *Config) enable(ctx context.Context) (err error) {
 		return err
 	}
 
+	err = c.redirectPorts(ctx, remove)
+	if err != nil {
+		return fmt.Errorf("redirecting ports: %w", err)
+	}
+
 	if err := c.runUserPostRules(ctx, c.customRulesPath, remove); err != nil {
 		return fmt.Errorf("running user defined post firewall rules: %w", err)
 	}
@@ -137,7 +157,13 @@ func (c *Config) allowVPNIP(ctx context.Context) (err error) {
 	}
 
 	const remove = false
+	interfacesSeen := make(map[string]struct{}, len(c.defaultRoutes))
 	for _, defaultRoute := range c.defaultRoutes {
+		_, seen := interfacesSeen[defaultRoute.NetInterface]
+		if seen {
+			continue
+		}
+		interfacesSeen[defaultRoute.NetInterface] = struct{}{}
 		err = c.acceptOutputTrafficToVPN(ctx, defaultRoute.NetInterface, c.vpnConnection, remove)
 		if err != nil {
 			return fmt.Errorf("accepting output traffic through VPN: %w", err)
@@ -168,8 +194,7 @@ func (c *Config) allowOutboundSubnets(ctx context.Context) (err error) {
 		}
 
 		if !firewallUpdated {
-			c.logger.Info(fmt.Sprintf("ignoring subnet %s which has "+
-				"no default route matching its family", subnet))
+			c.logIgnoredSubnetFamily(subnet)
 		}
 	}
 	return nil
@@ -184,6 +209,17 @@ func (c *Config) allowInputPorts(ctx context.Context) (err error) {
 				return fmt.Errorf("accepting input port %d on interface %s: %w",
 					port, netInterface, err)
 			}
+		}
+	}
+	return nil
+}
+
+func (c *Config) redirectPorts(ctx context.Context, remove bool) (err error) {
+	for _, portRedirection := range c.portRedirections {
+		err = c.redirectPort(ctx, portRedirection.interfaceName, portRedirection.sourcePort,
+			portRedirection.destinationPort, remove)
+		if err != nil {
+			return err
 		}
 	}
 	return nil

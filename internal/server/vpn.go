@@ -10,7 +10,8 @@ import (
 )
 
 func newVPNHandler(ctx context.Context, looper VPNLooper,
-	storage Storage, ipv6Supported bool, w warner) http.Handler {
+	storage Storage, ipv6Supported bool, w warner,
+) http.Handler {
 	return &vpnHandler{
 		ctx:           ctx,
 		looper:        looper,
@@ -38,7 +39,7 @@ func (h *vpnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case http.MethodPut:
 			h.setStatus(w, r)
 		default:
-			http.Error(w, "method "+r.Method+" not supported", http.StatusBadRequest)
+			errMethodNotSupported(w, r.Method)
 		}
 	case "/settings":
 		switch r.Method {
@@ -47,10 +48,10 @@ func (h *vpnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case http.MethodPut:
 			h.patchSettings(w, r)
 		default:
-			http.Error(w, "method "+r.Method+" not supported", http.StatusBadRequest)
+			errMethodNotSupported(w, r.Method)
 		}
 	default:
-		http.Error(w, "route "+r.RequestURI+" not supported", http.StatusBadRequest)
+		errRouteNotSupported(w, r.RequestURI)
 	}
 }
 
@@ -116,7 +117,7 @@ func (h *vpnHandler) patchSettings(w http.ResponseWriter, r *http.Request) {
 
 	updatedSettings := h.looper.GetSettings() // already copied
 	updatedSettings.OverrideWith(overrideSettings)
-	err = updatedSettings.Validate(h.storage, h.ipv6Supported)
+	err = updatedSettings.Validate(h.storage, h.ipv6Supported, h.warner)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

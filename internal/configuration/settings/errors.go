@@ -3,11 +3,14 @@ package settings
 import "errors"
 
 var (
+	ErrValueUnknown                    = errors.New("value is unknown")
 	ErrCityNotValid                    = errors.New("the city specified is not valid")
 	ErrControlServerPrivilegedPort     = errors.New("cannot use privileged port without running as root")
+	ErrCategoryNotValid                = errors.New("the category specified is not valid")
 	ErrCountryNotValid                 = errors.New("the country specified is not valid")
 	ErrFilepathMissing                 = errors.New("filepath is missing")
-	ErrFirewallZeroPort                = errors.New("cannot have a zero port to block")
+	ErrFirewallZeroPort                = errors.New("cannot have a zero port")
+	ErrFirewallPublicOutboundSubnet    = errors.New("outbound subnet has an unspecified address")
 	ErrHostnameNotValid                = errors.New("the hostname specified is not valid")
 	ErrISPNotValid                     = errors.New("the ISP specified is not valid")
 	ErrMinRatioNotValid                = errors.New("minimum ratio is not valid")
@@ -25,7 +28,8 @@ var (
 	ErrOpenVPNVerbosityIsOutOfBounds   = errors.New("verbosity value is out of bounds")
 	ErrOpenVPNVersionIsNotValid        = errors.New("version is not valid")
 	ErrPortForwardingEnabled           = errors.New("port forwarding cannot be enabled")
-	ErrPublicIPPeriodTooShort          = errors.New("public IP address check period is too short")
+	ErrPortForwardingUserEmpty         = errors.New("port forwarding username is empty")
+	ErrPortForwardingPasswordEmpty     = errors.New("port forwarding password is empty")
 	ErrRegionNotValid                  = errors.New("the region specified is not valid")
 	ErrServerAddressNotValid           = errors.New("server listening address is not valid")
 	ErrSystemPGIDNotValid              = errors.New("process group id is not valid")
@@ -47,5 +51,6 @@ var (
 	ErrWireguardPrivateKeyNotSet       = errors.New("private key is not set")
 	ErrWireguardPublicKeyNotSet        = errors.New("public key is not set")
 	ErrWireguardPublicKeyNotValid      = errors.New("public key is not valid")
+	ErrWireguardKeepAliveNegative      = errors.New("persistent keep alive interval is negative")
 	ErrWireguardImplementationNotValid = errors.New("implementation is not valid")
 )

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/qdm12/gluetun/internal/constants/vpn"
 	"github.com/qdm12/gluetun/internal/models"
@@ -11,7 +12,8 @@ import (
 )
 
 func (u *Updater) FetchServers(ctx context.Context, minServers int) (
-	servers []models.Server, err error) {
+	servers []models.Server, err error,
+) {
 	data, err := fetchAPI(ctx, u.client)
 	if err != nil {
 		return nil, fmt.Errorf("fetching API: %w", err)
@@ -58,9 +60,11 @@ func (u *Updater) FetchServers(ctx context.Context, minServers int) (
 
 	servers = make([]models.Server, 0, len(hostToIPs))
 	for _, serverData := range data.Servers {
+		city, region := parseCity(serverData.City)
 		server := models.Server{
 			Country: serverData.Country,
-			City:    serverData.City,
+			City:    city,
+			Region:  region,
 			ISP:     serverData.ISP,
 		}
 
@@ -95,4 +99,12 @@ func (u *Updater) FetchServers(ctx context.Context, minServers int) (
 	sort.Sort(models.SortableServers(servers))
 
 	return servers, nil
+}
+
+func parseCity(city string) (parsedCity, region string) {
+	commaIndex := strings.Index(city, ", ")
+	if commaIndex == -1 {
+		return city, ""
+	}
+	return city[:commaIndex], city[commaIndex+2:]
 }

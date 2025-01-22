@@ -9,7 +9,8 @@ import (
 )
 
 func filterServers(servers []models.Server,
-	selection settings.ServerSelection) (filtered []models.Server) {
+	selection settings.ServerSelection,
+) (filtered []models.Server) {
 	for _, server := range servers {
 		if filterServer(server, selection) {
 			continue
@@ -22,7 +23,8 @@ func filterServers(servers []models.Server,
 }
 
 func filterServer(server models.Server,
-	selection settings.ServerSelection) (filtered bool) {
+	selection settings.ServerSelection,
+) (filtered bool) {
 	// Note each condition is split to make sure
 	// we have full testing coverage.
 	if server.VPN != selection.VPN {
@@ -53,7 +55,23 @@ func filterServer(server models.Server,
 		return true
 	}
 
+	if *selection.PortForwardOnly && !server.PortForward {
+		return true
+	}
+
+	if *selection.SecureCoreOnly && !server.SecureCore {
+		return true
+	}
+
+	if *selection.TorOnly && !server.Tor {
+		return true
+	}
+
 	if filterByPossibilities(server.Country, selection.Countries) {
+		return true
+	}
+
+	if filterAnyByPossibilities(server.Categories, selection.Categories) {
 		return true
 	}
 
@@ -95,5 +113,19 @@ func filterByPossibilities[T string | uint16](value T, possibilities []T) (filte
 			return false
 		}
 	}
+	return true
+}
+
+func filterAnyByPossibilities(values, possibilities []string) (filtered bool) {
+	if len(possibilities) == 0 {
+		return false
+	}
+
+	for _, value := range values {
+		if !filterByPossibilities(value, possibilities) {
+			return false // found a valid value
+		}
+	}
+
 	return true
 }

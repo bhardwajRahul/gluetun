@@ -6,8 +6,9 @@ import (
 )
 
 func streamLines(ctx context.Context, done chan<- struct{},
-	logger Logger, stdout, stderr chan string,
-	tunnelReady chan<- struct{}) {
+	logger Logger, stdout, stderr <-chan string,
+	tunnelReady chan<- struct{},
+) {
 	defer close(done)
 
 	var line string
@@ -16,10 +17,6 @@ func streamLines(ctx context.Context, done chan<- struct{},
 		errLine := false
 		select {
 		case <-ctx.Done():
-			// Context should only be canceled after stdout and stderr are done
-			// being written to.
-			close(stdout)
-			close(stderr)
 			return
 		case line = <-stdout:
 		case line = <-stderr:

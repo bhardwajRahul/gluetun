@@ -15,11 +15,12 @@ type Loop struct {
 	settings      Settings
 	settingsMutex sync.RWMutex
 	service       Service
-	// Fixed injected objets
+	// Fixed injected objects
 	routing     Routing
 	client      *http.Client
 	portAllower PortAllower
 	logger      Logger
+	cmder       Cmder
 	// Fixed parameters
 	uid, gid int
 	// Internal channels and locks
@@ -34,19 +35,24 @@ type Loop struct {
 
 func NewLoop(settings settings.PortForwarding, routing Routing,
 	client *http.Client, portAllower PortAllower,
-	logger Logger, uid, gid int) *Loop {
+	logger Logger, cmder Cmder, uid, gid int,
+) *Loop {
 	return &Loop{
 		settings: Settings{
 			VPNIsUp: ptrTo(false),
 			Service: service.Settings{
-				Enabled:  settings.Enabled,
-				Filepath: *settings.Filepath,
+				Enabled:       settings.Enabled,
+				Filepath:      *settings.Filepath,
+				UpCommand:     *settings.UpCommand,
+				DownCommand:   *settings.DownCommand,
+				ListeningPort: *settings.ListeningPort,
 			},
 		},
 		routing:     routing,
 		client:      client,
 		portAllower: portAllower,
 		logger:      logger,
+		cmder:       cmder,
 		uid:         uid,
 		gid:         gid,
 	}
@@ -74,7 +80,8 @@ func (l *Loop) Start(_ context.Context) (runError <-chan error, _ error) {
 
 func (l *Loop) run(runCtx context.Context, runDone chan<- struct{},
 	runErrorCh chan<- error, updateTrigger <-chan Settings,
-	updateResult chan<- error) {
+	updateResult chan<- error,
+) {
 	defer close(runDone)
 
 	var serviceRunError <-chan error
@@ -112,13 +119,16 @@ func (l *Loop) run(runCtx context.Context, runDone chan<- struct{},
 		*serviceSettings.Enabled = *serviceSettings.Enabled && *l.settings.VPNIsUp
 
 		l.service = service.New(serviceSettings, l.routing, l.client,
-			l.portAllower, l.logger, l.uid, l.gid)
+			l.portAllower, l.logger, l.cmder, l.uid, l.gid)
 
 		var err error
 		serviceRunError, err = l.service.Start(runCtx)
 		if updateReceived {
 			// Signal to the Update call that the service has started
 			// and if it failed to start.
+			if err != nil {
+				err = fmt.Errorf("starting port forwarding service: %w", err)
+			}
 			updateResult <- err
 		}
 	}
@@ -149,11 +159,11 @@ func (l *Loop) Stop() (err error) {
 	return nil
 }
 
-func (l *Loop) GetPortForwarded() (port uint16) {
+func (l *Loop) GetPortsForwarded() (ports []uint16) {
 	if l.service == nil {
-		return 0
+		return nil
 	}
-	return l.service.GetPortForwarded()
+	return l.service.GetPortsForwarded()
 }
 
 func ptrTo[T any](value T) *T {

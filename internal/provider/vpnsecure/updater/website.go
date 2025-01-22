@@ -14,7 +14,8 @@ import (
 )
 
 func fetchServers(ctx context.Context, client *http.Client,
-	warner common.Warner) (servers []models.Server, err error) {
+	warner common.Warner,
+) (servers []models.Server, err error) {
 	const url = "https://www.vpnsecure.me/vpn-locations/"
 	rootNode, err := htmlutils.Fetch(ctx, client, url)
 	if err != nil {
@@ -32,14 +33,13 @@ func fetchServers(ctx context.Context, client *http.Client,
 	return servers, nil
 }
 
-var (
-	ErrHTMLServersDivNotFound = errors.New("HTML servers container div not found")
-)
+var ErrHTMLServersDivNotFound = errors.New("HTML servers container div not found")
 
 const divString = "div"
 
 func parseHTML(rootNode *html.Node) (servers []models.Server,
-	warnings []string, err error) {
+	warnings []string, err error,
+) {
 	// Find div container for all servers, searching with BFS.
 	serversDiv := findServersDiv(rootNode)
 	if serversDiv == nil {
@@ -86,13 +86,15 @@ func parseHTML(rootNode *html.Node) (servers []models.Server,
 }
 
 func parseHTMLGridItem(gridItem *html.Node) (
-	server models.Server, warning string) {
+	server models.Server, warning string,
+) {
 	gridItemDT := htmlutils.DirectChild(gridItem, matchDT)
 	if gridItemDT == nil {
 		return server, htmlutils.WrapWarning("grid item <dt> not found", gridItem)
 	}
 
 	host := findHost(gridItemDT)
+	host = naToEmpty(host)
 	if host == "" {
 		return server, htmlutils.WrapWarning("host not found", gridItemDT)
 	}
@@ -110,18 +112,21 @@ func parseHTMLGridItem(gridItem *html.Node) (
 	}
 
 	region := findSpanStrong(gridItemDD, "Region:")
+	region = naToEmpty(region)
 	if region == "" {
 		warning := fmt.Sprintf("region for host %s not found", host)
 		return server, htmlutils.WrapWarning(warning, gridItemDD)
 	}
 
 	city := findSpanStrong(gridItemDD, "City:")
+	city = naToEmpty(city)
 	if city == "" {
 		warning := fmt.Sprintf("region for host %s not found", host)
 		return server, htmlutils.WrapWarning(warning, gridItemDD)
 	}
 
 	premiumString := findSpanStrong(gridItemDD, "Premium:")
+	premiumString = naToEmpty(premiumString)
 	if premiumString == "" {
 		warning := fmt.Sprintf("premium for host %s not found", host)
 		return server, htmlutils.WrapWarning(warning, gridItemDD)
@@ -133,6 +138,13 @@ func parseHTMLGridItem(gridItem *html.Node) (
 		Hostname: host + ".isponeder.com",
 		Premium:  strings.EqualFold(premiumString, "yes"),
 	}, ""
+}
+
+func naToEmpty(current string) (output string) {
+	if current == "N / A" {
+		return ""
+	}
+	return current
 }
 
 func findCountry(countryNode *html.Node) (country string) {
@@ -210,7 +222,8 @@ func matchStatusSpan(node *html.Node) (match bool) {
 }
 
 func findSpanStrong(gridItemDD *html.Node, spanData string) (
-	strongValue string) {
+	strongValue string,
+) {
 	spanFound := false
 	for child := gridItemDD.FirstChild; child != nil; child = child.NextSibling {
 		if !htmlutils.MatchData("div")(child) {

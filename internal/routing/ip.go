@@ -14,16 +14,14 @@ func ipIsPrivate(ip netip.Addr) bool {
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
 }
 
-var (
-	errInterfaceIPNotFound = errors.New("IP address not found for interface")
-)
+var errInterfaceIPNotFound = errors.New("IP address not found for interface")
 
 func ipMatchesFamily(ip netip.Addr, family int) bool {
 	return (family == netlink.FamilyV4 && ip.Is4()) ||
 		(family == netlink.FamilyV6 && ip.Is6())
 }
 
-func (r *Routing) assignedIP(interfaceName string, family int) (ip netip.Addr, err error) {
+func (r *Routing) AssignedIP(interfaceName string, family int) (ip netip.Addr, err error) {
 	iface, err := net.InterfaceByName(interfaceName)
 	if err != nil {
 		return ip, fmt.Errorf("network interface %s not found: %w", interfaceName, err)

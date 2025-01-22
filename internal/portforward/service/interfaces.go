@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"net/netip"
+	"os/exec"
 
 	"github.com/qdm12/gluetun/internal/provider/utils"
 )
@@ -10,10 +11,13 @@ import (
 type PortAllower interface {
 	SetAllowedPort(ctx context.Context, port uint16, intf string) (err error)
 	RemoveAllowedPort(ctx context.Context, port uint16) (err error)
+	RedirectPort(ctx context.Context, intf string, sourcePort,
+		destinationPort uint16) (err error)
 }
 
 type Routing interface {
 	VPNLocalGatewayIP(vpnInterface string) (gateway netip.Addr, err error)
+	AssignedIP(interfaceName string, family int) (ip netip.Addr, err error)
 }
 
 type Logger interface {
@@ -26,6 +30,11 @@ type Logger interface {
 type PortForwarder interface {
 	Name() string
 	PortForward(ctx context.Context, objects utils.PortForwardObjects) (
-		port uint16, err error)
+		ports []uint16, err error)
 	KeepPortForward(ctx context.Context, objects utils.PortForwardObjects) (err error)
+}
+
+type Cmder interface {
+	Start(cmd *exec.Cmd) (stdoutLines, stderrLines <-chan string,
+		waitError <-chan error, startErr error)
 }

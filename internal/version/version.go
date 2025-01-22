@@ -5,16 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 
+	"github.com/qdm12/gluetun/internal/format"
 	"github.com/qdm12/gluetun/internal/models"
-	"github.com/qdm12/golibs/format"
 )
 
 // GetMessage returns a message for the user describing if there is a newer version
 // available. It should only be called once the tunnel is established.
 func GetMessage(ctx context.Context, buildInfo models.BuildInformation,
-	client *http.Client) (message string, err error) {
+	client *http.Client,
+) (message string, err error) {
 	if buildInfo.Version == "latest" {
 		// Find # of commits between current commit and latest commit
 		commitsSince, err := getCommitsSince(ctx, client, buildInfo.Commit)
@@ -49,13 +51,17 @@ func getLatestRelease(ctx context.Context, client *http.Client) (tagName, name s
 	if err != nil {
 		return "", "", time, err
 	}
+	// Sort releases by tag names (semver)
+	sort.Slice(releases, func(i, j int) bool {
+		return releases[i].TagName > releases[j].TagName
+	})
 	for _, release := range releases {
 		if release.Prerelease {
 			continue
 		}
 		return release.TagName, release.Name, release.PublishedAt, nil
 	}
-	return "", "", time, errReleaseNotFound
+	return "", "", time, fmt.Errorf("%w", errReleaseNotFound)
 }
 
 var errCommitNotFound = errors.New("commit not found")
